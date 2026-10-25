@@ -587,7 +587,102 @@ test.describe('Texture Mosaic v0.1 — Automated Verification (§8.2)', () => {
       ]
     );
 
-    // 1h. Transparency check (D13): semi-transparent stack image flattens over black with alpha = 255
+    // 1h. Adaptive Saturation FX Pass (D5 & U8): empty satMap (value 1 = untouched), R=0 (grayscale), R=255 (oversaturated), and custom satMin/satMax
+    const satTestLayer = [makeSolid(W, H, 200, 100, 50)];
+    for (const satCase of [
+      {
+        name: 'sat-empty-map-default-untouched',
+        satMap: null as RawTextureInput | null,
+        satMin: 0,
+        satMax: 5,
+      },
+      {
+        name: 'sat-map-zero-grayscale',
+        satMap: makeSolid(W, H, 0, 0, 0),
+        satMin: 0,
+        satMax: 5,
+      },
+      {
+        name: 'sat-map-mid-boosted',
+        satMap: makeSolid(W, H, 128, 0, 0),
+        satMin: 0.5,
+        satMax: 2.5,
+      },
+      {
+        name: 'sat-map-full-oversaturated',
+        satMap: makeSolid(W, H, 255, 0, 0),
+        satMin: 0,
+        satMax: 3.5,
+      },
+    ]) {
+      const satGpu = await page.evaluate(
+        ({ satCase, W, H }) => {
+          const api = window.__TEXTURE_MOSAIC_DEBUG__!;
+          const layer = new Uint8Array(W * H * 4);
+          for (let i = 0; i < layer.length; i += 4) {
+            layer[i] = 200;
+            layer[i + 1] = 100;
+            layer[i + 2] = 50;
+            layer[i + 3] = 255;
+          }
+          api.setStackRaw([{ width: W, height: H, data: layer }]);
+          const blk = new Uint8Array(4 * 4 * 4);
+          for (let i = 3; i < blk.length; i += 4) blk[i] = 255;
+          api.setControlRaw({ width: 4, height: 4, data: blk });
+          api.setMaskRaw(null);
+          api.setSatMapRaw(
+            satCase.satMap
+              ? {
+                  width: satCase.satMap.width,
+                  height: satCase.satMap.height,
+                  data: new Uint8Array(satCase.satMap.data),
+                }
+              : null
+          );
+          api.setParam('satMin', satCase.satMin);
+          api.setParam('satMax', satCase.satMax);
+          api.renderNow();
+          const px = api.readPixelAtUV(0.5, 0.5);
+          const errs = api.getGlErrors();
+          api.clearSatMap();
+          api.resetGroup('saturation');
+          return { px, errs };
+        },
+        {
+          satCase: {
+            ...satCase,
+            satMap: satCase.satMap
+              ? {
+                  width: satCase.satMap.width,
+                  height: satCase.satMap.height,
+                  data: Array.from(satCase.satMap.data),
+                }
+              : null,
+          },
+          W,
+          H,
+        }
+      );
+      expect(satGpu.errs).toEqual([]);
+      const expectedSatPx = evaluateShaderPixelCPU(
+        (Math.floor(0.5 * W) + 0.5) / W,
+        (Math.floor(0.5 * H) + 0.5) / H,
+        makeSolid(4, 4, 0, 0, 0),
+        null,
+        satTestLayer,
+        {
+          ...DEFAULT_SHADER_PARAMS,
+          numImages: 1,
+          satMin: satCase.satMin,
+          satMax: satCase.satMax,
+        },
+        singleLayerMaps,
+        satCase.satMap
+      );
+      expectPixelNear(satGpu.px, expectedSatPx, 3, satCase.name);
+    }
+
+    // 1i. Transparency check (D13): semi-transparent stack image flattens over black with alpha = 255
     const alphaResult = await page.evaluate(() => {
       const api = window.__TEXTURE_MOSAIC_DEBUG__!;
       const rgba = new Uint8Array(64 * 64 * 4);
@@ -833,6 +928,74 @@ test.describe('Texture Mosaic v0.1 — Automated Verification (§8.2)', () => {
     await page.getByTestId('reset-smoothBlend-btn').click();
     expect(await captureDigest()).toBe(baseDigest);
 
+    // Test Saturation group (satMin, satMax) & resets
+    await page.getByTestId('param-satMin-slider').fill('2.5');
+    await page.getByTestId('param-satMin-slider').dispatchEvent('input');
+    expect(await captureDigest()).not.toBe(baseDigest);
+    await page.getByTestId('reset-satMin-btn').click();
+    expect(await captureDigest()).toBe(baseDigest);
+
+    await page.getByTestId('param-satMax-slider').fill('0');
+    await page.getByTestId('param-satMax-slider').dispatchEvent('input');
+    expect(await captureDigest()).not.toBe(baseDigest);
+    await page.getByTestId('reset-satMax-btn').click();
+    expect(await captureDigest()).toBe(baseDigest);
+
+    // Test Perlin Noise source & Noise parameter group (scale, detail, contrast) + live processed input preview thumbnails (U9 & U10)
+    const initialCtrlThumb = await page.evaluate(
+      () => window.__TEXTURE_MOSAIC_DEBUG__!.getState().controlSource.thumbnailUrl
+    );
+
+    // Changing control contrast or offset updates the Control input preview thumbnail in real time (U10)
+    await page.getByTestId('param-contrast-slider').fill('3.5');
+    await page.getByTestId('param-contrast-slider').dispatchEvent('input');
+    const contrastedCtrlThumb = await page.evaluate(
+      () => window.__TEXTURE_MOSAIC_DEBUG__!.getState().controlSource.thumbnailUrl
+    );
+    expect(contrastedCtrlThumb).not.toBe(initialCtrlThumb);
+    await page.getByTestId('reset-contrast-btn').click();
+    expect(
+      await page.evaluate(
+        () => window.__TEXTURE_MOSAIC_DEBUG__!.getState().controlSource.thumbnailUrl
+      )
+    ).toBe(initialCtrlThumb);
+
+    // Select Perlin Noise on Control input and verify scale, detail, and contrast change both canvas output and preview thumbnail (U9 & U10)
+    await page.getByTestId('control-source-noise').click();
+    await expect(page.getByTestId('control-status-label')).toHaveText('Noise');
+    const noiseBaseDigest = await captureDigest();
+    const noiseBaseThumb = await page.evaluate(
+      () => window.__TEXTURE_MOSAIC_DEBUG__!.getState().controlSource.thumbnailUrl
+    );
+    expect(noiseBaseDigest).not.toBe(baseDigest);
+
+    await page.getByTestId('param-noiseScale-slider').fill('18');
+    await page.getByTestId('param-noiseScale-slider').dispatchEvent('input');
+    expect(await captureDigest()).not.toBe(noiseBaseDigest);
+    expect(
+      await page.evaluate(
+        () => window.__TEXTURE_MOSAIC_DEBUG__!.getState().controlSource.thumbnailUrl
+      )
+    ).not.toBe(noiseBaseThumb);
+    await page.getByTestId('reset-noiseScale-btn').click();
+    expect(await captureDigest()).toBe(noiseBaseDigest);
+
+    await page.getByTestId('param-noiseDetail-slider').fill('1');
+    await page.getByTestId('param-noiseDetail-slider').dispatchEvent('input');
+    expect(await captureDigest()).not.toBe(noiseBaseDigest);
+    await page.getByTestId('reset-noiseDetail-btn').click();
+    expect(await captureDigest()).toBe(noiseBaseDigest);
+
+    await page.getByTestId('param-noiseContrast-slider').fill('2.8');
+    await page.getByTestId('param-noiseContrast-slider').dispatchEvent('input');
+    expect(await captureDigest()).not.toBe(noiseBaseDigest);
+    await page.getByTestId('reset-noiseContrast-btn').click();
+    expect(await captureDigest()).toBe(noiseBaseDigest);
+
+    // Switch Control back to image without page reload
+    await page.getByTestId('control-source-image').click();
+    expect(await captureDigest()).toBe(baseDigest);
+
     // Verify PNG snapshot is valid and matches working resolution 640x360 with opaque alpha
     await page.evaluate(() => {
       window.__TEXTURE_MOSAIC_DEBUG__!.setWorkingResolution(640, 360);
@@ -884,9 +1047,10 @@ test.describe('Texture Mosaic v0.1 — Automated Verification (§8.2)', () => {
     await page.goto('/');
     await page.waitForSelector('[data-testid="render-canvas"]');
 
-    // Verify all 3 input groups exist in Left Panel
+    // Verify all 4 input groups exist in Left Panel
     await expect(page.getByTestId('control-input-group')).toBeVisible();
     await expect(page.getByTestId('indexMap-input-group')).toBeVisible();
+    await expect(page.getByTestId('satMap-input-group')).toBeVisible();
     await expect(page.getByTestId('mask-input-group')).toBeVisible();
 
     // Verify setting a single Index Map input via setIndexMapRaw maps to all 4 levels L=0, 1, 2, 3
@@ -979,6 +1143,19 @@ test.describe('Texture Mosaic v0.1 — Automated Verification (§8.2)', () => {
 
     await page.getByTestId('indexMap-source-image').click();
     await expect(page.getByTestId('indexMap-status-label')).toHaveText('Image');
+
+    // Also verify satMap video load, transport ("Video Sat"), and clear button
+    await expect(page.getByTestId('satMap-status-label')).toHaveText('None');
+    await page.setInputFiles(
+      '[data-testid="satMap-video-file-input"]',
+      'Video/TestVideo1.mov'
+    );
+    await expect(page.getByTestId('satMap-status-label')).toHaveText(
+      'Video Sat'
+    );
+    await expect(page.getByTestId('satMap-play-pause-btn')).toBeEnabled();
+    await page.getByTestId('satMap-clear-btn').click();
+    await expect(page.getByTestId('satMap-status-label')).toHaveText('None');
   });
 
   test('4. Offset animation with controlled clock (§3 & §8.2)', async ({
@@ -1220,8 +1397,11 @@ test.describe('Texture Mosaic v0.1 — Automated Verification (§8.2)', () => {
       });
     });
     expect(edgeSample.sq).toBe(true);
-    expect(edgeSample.left[0]).toBeGreaterThan(200);
-    expect(edgeSample.left[2]).toBeLessThan(60);
+    // Control preview shows processed Rec.709 grayscale luma: red field (#ff0000) -> round(0.2126*255) = 54,
+    // whereas cropped-out blue edge strip (#0000ff) would be round(0.0722*255) = 18
+    expect(edgeSample.left[0]).toBeGreaterThan(45);
+    expect(edgeSample.left[0]).toBeLessThan(65);
+    expect(edgeSample.left[0]).toBe(edgeSample.left[1]);
   });
 
   test('6. Production build serves cleanly from root and subfolder + captures review screenshots & perf metrics', async ({

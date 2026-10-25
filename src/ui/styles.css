@@ -45,8 +45,8 @@ body {
 
 .ts-panel-inputs {
   border-right: 1px solid #161616;
-  gap: 14px;
-  padding: 16px 24px;
+  gap: 10px;
+  padding: 14px 20px;
 }
 
 .ts-panel-params {
@@ -132,22 +132,22 @@ body {
 
 .ts-source-grid {
   display: grid;
-  grid-template-columns: 126px 102px;
-  gap: 14px;
+  grid-template-columns: 126px 96px;
+  gap: 12px;
   align-items: stretch;
 }
 
 .ts-source-buttons {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ts-source-buttons .button {
   width: 100%;
-  height: 30px;
+  height: 21px;
   padding: 0 8px;
-  font-size: 13px;
+  font-size: 11.5px;
   font-weight: 700;
   text-transform: lowercase;
   background: var(--ts-bg-outer);
@@ -161,8 +161,8 @@ body {
 
 /* Thumbnail / Empty Box (Figma 10:1229) */
 .ts-source-preview {
-  width: 102px;
-  height: 102px;
+  width: 96px;
+  height: 96px;
   background: var(--ts-bg-outer);
   border: 1px solid var(--ts-border);
   position: relative;
@@ -170,7 +170,7 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   cursor: pointer;
   overflow: hidden;
   user-select: none;
@@ -367,8 +367,8 @@ body {
 
 .ts-transports {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
   flex: 1;
   min-width: 0;
 }
@@ -420,26 +420,31 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
+  gap: 6px;
+  min-height: 26px;
   white-space: nowrap;
 }
 
 .ts-transport-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .ts-transport-left .ts-field-label {
-  font-size: 12px;
+  font-size: 10.5px;
+  line-height: 1.2;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ts-media-btn {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
   padding: 0;
   background: var(--ts-bg-outer);
   border: 1px solid var(--ts-border);
@@ -449,6 +454,7 @@ body {
   align-items: center;
   justify-content: center;
   font-family: inherit;
+  font-size: 10px;
 }
 
 .ts-media-btn:hover:not(:disabled) {
@@ -463,9 +469,10 @@ body {
 .ts-time-display {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: 3px;
+  font-size: 10.5px;
   color: var(--ts-muted);
+  flex-shrink: 0;
 }
 
 .ts-time-current {

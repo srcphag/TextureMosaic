@@ -11,8 +11,8 @@ All automated unit and end-to-end WebGL2 pixel tests passed with zero errors:
 
 | Suite | Runner | Tests | Status | Duration |
 |---|---|---|---|---|
-| `tests/unit/shader-and-clock.test.ts` | Vitest (`v3.2.7`) | 10 passed | PASS | ~35 ms |
-| `tests/e2e/texture-stack.spec.ts` | Playwright (`Desktop Chrome` WebGL2) | 6 passed (95+ assertions) | PASS | ~21.0 s |
+| `tests/unit/shader-and-clock.test.ts` | Vitest (`v3.2.7`) | 13 passed | PASS | ~37 ms |
+| `tests/e2e/texture-stack.spec.ts` | Playwright (`Desktop Chrome` WebGL2) | 6 passed (115+ assertions) | PASS | ~32.8 s |
 
 ### Verified Items (§8.2)
 
@@ -24,12 +24,18 @@ All automated unit and end-to-end WebGL2 pixel tests passed with zero errors:
   - **Control:** `contrast = 1` (unchanged), `contrast = 0` (flat mid-grey `0.5`), `contrast = 2.5` (boosted); `offset` with clamp (`cyclic = 0`) and wrap (`cyclic = 1`); BT.709 luminance weights (`0.2126`, `0.7152`, `0.0722`) verified with pure red, pure green, and pure blue control textures; `invert color` toggle.
   - **Mask:** White (`1.0`), black (`0.0`), and mid-grey (`0.5`) masks; `maskMin` / `maskMax` range remap including `maskMin > maskMax` (`0.8 > 0.2`); `invertMask`; `maskInfluence` at `0`, `0.5`, and `1`; mask luminance weights (`0.2126`, `0.7152`, `0.0722`) verified with pure R/G/B masks; verified that the original control image shown where mask is black (`m = 0`) has **no contrast and no offset** even when `contrast = 3.5` and `offset = 0.8`.
   - **Orientation & GL errors:** Verified across all 4 quadrants (`Top-Left`, `Top-Right`, `Bottom-Left`, `Bottom-Right`), with `gl.getError()` returning `[]` after every case.
+  - **Adaptive Saturation Control FX pass (`fx_saturation.frag`, D5 & U8):** Ported `Shaders/saturation_control_pixel.glsl` to WebGL2 as Pass 2 (removing `fx_passthrough.frag`). Verified GPU vs. CPU pixel parity for empty saturation map (`51/255 = 0.2` fallback with default `min = 0, max = 5` → `satAmount = 1.0` untouched), `R = 0` (`satMin = 0` grayscale Rec. 709 luma), `R = 128` mid-boosted, and `R = 255` (`satMax` oversaturated).
   - **Transparency (D13):** Semi-transparent stack image (`alpha = 128`) flattened over black on load and output with opaque `alpha = 255`.
-- **Index Map media input (§3 D15, U6 & §8.2):**
-  - Left `Inputs` column provides 3 independent `webcam` / `video file` / `image file` input slots: **control input** (`uControl`), **index map input** (mapped to all 4 shader `uIndexMap0..3`), and **mask input** (`uMask`).
-  - Verified that loading a texture, video, or webcam into `index map input` binds to all 4 subdivision levels (`L = 0..3`).
-  - Removed the procedural `index maps` parameter group (`seed`, `transition duration`, `shuffle`) from the right Parameters panel.
-  - Bottom playback bar displays 3 independent transports (Control left, Index Map center, Mask right), and `⟲ sync videos` restarts all loaded videos across all 3 slots from time `0`.
+- **4 Media Inputs (`control`, `indexMap`, `satMap`, `mask` — D1, D5, D14, D15, U6, U8):**
+  - Left `Inputs` column provides 4 independent `webcam` / `video file` / `image file` input slots: **control input** (`uControl`), **index map input** (mapped to all 4 shader `uIndexMap0..3`), **saturation map** (`uSatMap` in Pass 2 FX), and **mask input** (`uMask`).
+  - Verified that loading a texture, video, or webcam into `index map input` binds to all 4 subdivision levels (`L = 0..3`), and `saturation map` drives Pass 2 saturation with a `clear` button restoring neutral `1.0` saturation.
+  - Removed the procedural `index maps` parameter group (`seed`, `transition duration`, `shuffle`) from the right Parameters panel, and added the **saturation** parameter group (`min` and `max`, range `0..5`, defaults `0` and `5`).
+  - Bottom playback bar displays 4 independent transports (Control, Index Map, Saturation Map, Mask), and `⟲ sync videos` restarts all loaded videos across all 4 slots from time `0`.
+- **Selectable Perlin Noise Source (`src/engine/noise.ts`, U9):**
+  - Added a 4th `noise` source button to each of the 4 input slots (`control`, `indexMap`, `satMap`, `mask`) backed by a shared deterministic multi-octave Perlin noise generator.
+  - Added the `noise` parameter group (`scale` `0.5..32` default `6`, `detail` `1..8` default `4`, `contrast` `0..4` default `1`) in the Parameters column; verified that each control updates all active `noise` slots and their thumbnails in real time and resets restore the default state.
+- **Live Processed Input Preview Thumbnails (`src/engine/previews.ts`, U10):**
+  - Input preview thumbnails in the Left `Inputs` column display the real-time processed signal before entering the shader: Control shows the grayscale level-driving signal (`invertControl` → `contrast` → Rec.709 `luma` → `offset` clamp/wrap); Saturation Map shows the normalized `mix(satMin, satMax, r)` multiplier; Mask shows the remapped `m` factor (`maskMin` / `maskMax` / `invertMask` / `maskInfluence`); and `noise` slots reflect `scale`, `detail`, and `contrast` changes live.
 - **Manual Canvas Size input fix (U7):**
   - Fixed `updateUI()` so `resolution-width-input` and `resolution-height-input` are never overwritten during live animation frames while the user is typing, and commit on `Enter` or `change`/blur. Verified with a regression test typing a new resolution while `animSpeed = 0.25` is actively running.
 - **App & UI behavior:**

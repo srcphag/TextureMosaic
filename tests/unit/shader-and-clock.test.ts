@@ -18,6 +18,12 @@ import {
   ShaderParams,
 } from '../../src/engine/types';
 import { makeSolidTexture } from '../../src/engine/fixtures';
+import { generatePerlinNoiseTexture } from '../../src/engine/noise';
+import {
+  evaluateControlPreviewByte,
+  evaluateMaskPreviewByte,
+  evaluateSatMapPreviewByte,
+} from '../../src/engine/previews';
 
 function makeParams(overrides: Partial<ShaderParams> = {}): ShaderParams {
   return { ...DEFAULT_SHADER_PARAMS, ...overrides };
@@ -450,6 +456,61 @@ describe('Shader Contract (§4) — CPU Reference Implementation', () => {
     expect(flat[6]).toBe(0);
     expect(flat[7]).toBe(255);
   });
+
+  it('7. Adaptive Saturation FX Pass (D5 & U8): empty satMap = value 1 (no change), R=0 -> satMin (grayscale), R=255 -> satMax (oversaturated)', () => {
+    const stack = [makeSolidTexture(4, 4, 200, 100, 50)];
+    const ctrl = makeSolidTexture(4, 4, 0, 0, 0);
+    const maps = makeConstantLevelIndexMaps([
+      [0, 0, 255],
+      [0, 0, 255],
+      [0, 0, 255],
+      [0, 0, 255],
+    ]);
+
+    // Empty satMap (null) with default satMin=0, satMax=5 -> fallback 51/255 = 0.2 -> satAmount = 1.0 -> [200, 100, 50, 255]
+    const emptySatPx = evaluateShaderPixelCPU(
+      0.5,
+      0.5,
+      ctrl,
+      null,
+      stack,
+      makeParams({ numImages: 1, satMin: 0, satMax: 5 }),
+      maps,
+      null
+    );
+    expect(emptySatPx).toEqual([200, 100, 50, 255]);
+
+    // Black satMap (R=0) with satMin=0 -> satAmount = 0 -> grayscale luma = 200*0.2126 + 100*0.7152 + 50*0.0722 = 117.65 -> 118
+    const zeroSatMap = makeSolidTexture(4, 4, 0, 0, 0);
+    const grayPx = evaluateShaderPixelCPU(
+      0.5,
+      0.5,
+      ctrl,
+      null,
+      stack,
+      makeParams({ numImages: 1, satMin: 0, satMax: 5 }),
+      maps,
+      zeroSatMap
+    );
+    expect(grayPx[0]).toBe(grayPx[1]);
+    expect(grayPx[1]).toBe(grayPx[2]);
+    expect(Math.abs(grayPx[0] - 118)).toBeLessThanOrEqual(1);
+
+    // White satMap (R=255) with satMax=2.0 -> satAmount = 2.0 -> oversaturated (R boosted above 200, B pushed toward 0)
+    const fullSatMap = makeSolidTexture(4, 4, 255, 0, 0);
+    const overSatPx = evaluateShaderPixelCPU(
+      0.5,
+      0.5,
+      ctrl,
+      null,
+      stack,
+      makeParams({ numImages: 1, satMin: 0, satMax: 2.0 }),
+      maps,
+      fullSatMap
+    );
+    expect(overSatPx[0]).toBeGreaterThan(240);
+    expect(overSatPx[2]).toBeLessThan(10);
+  });
 });
 
 describe('Index Maps Generator & Transition Controller (§3 D15 & §8.2)', () => {
@@ -507,5 +568,77 @@ describe('Offset Animation Clock (§3 & §8.2)', () => {
 
     clock.setHidden(false, 8000);
     expect(clock.tick(8200)).toBeCloseTo(0.2, 5);
+  });
+});
+
+describe('Perlin Noise Generator & Live Processed Input Previews (U9 & U10)', () => {
+  it('generates deterministic Perlin noise and responds to scale, detail, and contrast', () => {
+    const n1 = generatePerlinNoiseTexture(32, 32, 6, 4, 1);
+    const n2 = generatePerlinNoiseTexture(32, 32, 6, 4, 1);
+    const diffScale = generatePerlinNoiseTexture(32, 32, 16, 4, 1);
+    const diffDetail = generatePerlinNoiseTexture(32, 32, 6, 1, 1);
+    const zeroContrast = generatePerlinNoiseTexture(16, 16, 6, 4, 0);
+
+    expect(Array.from(n1.data)).toEqual(Array.from(n2.data));
+    expect(Array.from(n1.data)).not.toEqual(Array.from(diffScale.data));
+    expect(Array.from(n1.data)).not.toEqual(Array.from(diffDetail.data));
+    // Contrast 0 clamps every pixel to mid-grey 128
+    expect(zeroContrast.data[0]).toBe(128);
+    expect(zeroContrast.data[1]).toBe(128);
+    expect(zeroContrast.data[2]).toBe(128);
+    expect(zeroContrast.data[3]).toBe(255);
+  });
+
+  it('evaluates processed preview signals for Control, Saturation Map, and Mask', () => {
+    // Control preview: invert, contrast, luma, offset
+    const baseCtrl = evaluateControlPreviewByte(1, 0, 0, {
+      invertControl: 0,
+      contrast: 1,
+      offset: 0,
+      cyclic: 0,
+    });
+    expect(baseCtrl).toBe(Math.round(0.2126 * 255)); // 54
+
+    const offsetCtrl = evaluateControlPreviewByte(1, 0, 0, {
+      invertControl: 0,
+      contrast: 1,
+      offset: 0.5,
+      cyclic: 0,
+    });
+    expect(offsetCtrl).toBe(Math.round(0.7126 * 255));
+
+    // Saturation preview: mix(satMin, satMax, r) / 5
+    expect(evaluateSatMapPreviewByte(0, { satMin: 1, satMax: 4 })).toBe(
+      Math.round((1 / 5) * 255)
+    );
+    expect(evaluateSatMapPreviewByte(1, { satMin: 1, satMax: 4 })).toBe(
+      Math.round((4 / 5) * 255)
+    );
+
+    // Mask preview: remap, invert, influence
+    expect(
+      evaluateMaskPreviewByte(0, 0, 0, {
+        maskMin: 0,
+        maskMax: 1,
+        invertMask: 0,
+        maskInfluence: 1,
+      })
+    ).toBe(0);
+    expect(
+      evaluateMaskPreviewByte(0, 0, 0, {
+        maskMin: 0,
+        maskMax: 1,
+        invertMask: 1,
+        maskInfluence: 1,
+      })
+    ).toBe(255);
+    expect(
+      evaluateMaskPreviewByte(0, 0, 0, {
+        maskMin: 0,
+        maskMax: 1,
+        invertMask: 0,
+        maskInfluence: 0,
+      })
+    ).toBe(255);
   });
 });

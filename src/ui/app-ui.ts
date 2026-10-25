@@ -38,6 +38,8 @@ export function mountTextureMosaicUI(
     <input type="file" accept="video/*,.mov,.mp4,.webm" style="display:none" data-testid="control-video-file-input" />
     <input type="file" accept="image/*" style="display:none" data-testid="indexMap-image-file-input" />
     <input type="file" accept="video/*,.mov,.mp4,.webm" style="display:none" data-testid="indexMap-video-file-input" />
+    <input type="file" accept="image/*" style="display:none" data-testid="satMap-image-file-input" />
+    <input type="file" accept="video/*,.mov,.mp4,.webm" style="display:none" data-testid="satMap-video-file-input" />
     <input type="file" accept="image/*" style="display:none" data-testid="mask-image-file-input" />
     <input type="file" accept="video/*,.mov,.mp4,.webm" style="display:none" data-testid="mask-video-file-input" />
     <input type="file" accept="image/*" multiple style="display:none" data-testid="stack-file-input" />
@@ -58,6 +60,7 @@ export function mountTextureMosaicUI(
             <button type="button" class="button" data-testid="control-source-webcam">webcam</button>
             <button type="button" class="button" data-testid="control-source-video">video file</button>
             <button type="button" class="button" data-testid="control-source-image">image file</button>
+            <button type="button" class="button" data-testid="control-source-noise">noise</button>
           </div>
           <div class="ts-source-preview" data-testid="control-thumbnail-box" title="Click to load control image or video">
             <div class="ts-empty-glyph">${MEDIA_GLYPH_SVG}</div>
@@ -76,6 +79,7 @@ export function mountTextureMosaicUI(
             <button type="button" class="button" data-testid="indexMap-source-webcam">webcam</button>
             <button type="button" class="button" data-testid="indexMap-source-video">video file</button>
             <button type="button" class="button" data-testid="indexMap-source-image">image file</button>
+            <button type="button" class="button" data-testid="indexMap-source-noise">noise</button>
           </div>
           <div class="ts-source-preview" data-testid="indexMap-thumbnail-box" title="Click to load index map image or video">
             <div class="ts-empty-glyph">${MEDIA_GLYPH_SVG}</div>
@@ -84,7 +88,27 @@ export function mountTextureMosaicUI(
         </div>
       </section>
 
-      <!-- 3. MASK INPUT -> uMask -->
+      <!-- 3. SATURATION MAP INPUT -> uSatMap (FX stage) -->
+      <section class="ts-source-block" data-testid="satMap-input-group">
+        <div class="ts-block-header">
+          <span class="ts-field-label">saturation map</span>
+          <button type="button" class="ts-reset-inline" data-testid="satMap-clear-btn" title="Clear saturation map">clear</button>
+        </div>
+        <div class="ts-source-grid">
+          <div class="ts-source-buttons">
+            <button type="button" class="button" data-testid="satMap-source-webcam">webcam</button>
+            <button type="button" class="button" data-testid="satMap-source-video">video file</button>
+            <button type="button" class="button" data-testid="satMap-source-image">image file</button>
+            <button type="button" class="button" data-testid="satMap-source-noise">noise</button>
+          </div>
+          <div class="ts-source-preview" data-testid="satMap-thumbnail-box" title="Click to load saturation map image or video">
+            <div class="ts-empty-glyph">${MEDIA_GLYPH_SVG}</div>
+            <span class="ts-empty-label">add image</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. MASK INPUT -> uMask -->
       <section class="ts-source-block" data-testid="mask-input-group">
         <div class="ts-block-header">
           <span class="ts-field-label">mask input</span>
@@ -95,6 +119,7 @@ export function mountTextureMosaicUI(
             <button type="button" class="button" data-testid="mask-source-webcam">webcam</button>
             <button type="button" class="button" data-testid="mask-source-video">video file</button>
             <button type="button" class="button" data-testid="mask-source-image">image file</button>
+            <button type="button" class="button" data-testid="mask-source-noise">noise</button>
           </div>
           <div class="ts-source-preview" data-testid="mask-thumbnail-box" title="Click to load mask image or video">
             <div class="ts-empty-glyph">${MEDIA_GLYPH_SVG}</div>
@@ -103,7 +128,7 @@ export function mountTextureMosaicUI(
         </div>
       </section>
 
-      <!-- 4. TEXTURE STACK INPUT (Figma 8:413) -->
+      <!-- 5. TEXTURE STACK INPUT (Figma 8:413) -->
       <section class="ts-source-block" data-testid="stack-input-group" style="flex:1; min-height:0;">
         <div class="ts-block-header">
           <span class="ts-field-label">texture input</span>
@@ -170,6 +195,24 @@ export function mountTextureMosaicUI(
                 <span class="ts-time-total">/ <span data-testid="indexMap-time-duration">00:00</span></span>
               </div>
               <span class="ts-live-label" data-testid="indexMap-live-label" style="display:none;">Live</span>
+            </div>
+          </div>
+
+          <!-- SATURATION MAP INPUT TRANSPORT (D14) -->
+          <div class="ts-transport" data-testid="satMap-transport">
+            <div class="progress ts-progress-clickable is-static" data-testid="satMap-progress-bar">
+              <div class="progress-bar" data-testid="satMap-progress-fill" style="width: 0%;"></div>
+            </div>
+            <div class="ts-transport-row">
+              <div class="ts-transport-left">
+                <button type="button" class="ts-media-btn" data-testid="satMap-play-pause-btn" title="Play / Pause saturation map video" disabled>▶</button>
+                <span class="ts-field-label" data-testid="satMap-status-label">None</span>
+              </div>
+              <div class="ts-time-display" data-testid="satMap-time-label" style="display:none;">
+                <span class="ts-time-current" data-testid="satMap-time-current">00:00</span>
+                <span class="ts-time-total">/ <span data-testid="satMap-time-duration">00:00</span></span>
+              </div>
+              <span class="ts-live-label" data-testid="satMap-live-label" style="display:none;">Live</span>
             </div>
           </div>
 
@@ -306,6 +349,52 @@ export function mountTextureMosaicUI(
         </div>
       </section>
 
+      <!-- PERLIN NOISE GROUP (Spec §3 Noise) -->
+      <section class="ts-param-group" data-testid="group-noise">
+        <div class="ts-block-header">
+          <span class="ts-field-label">noise</span>
+          <button type="button" class="ts-reset-inline" data-testid="reset-group-noise-btn" title="Reset noise controls">rst all</button>
+        </div>
+
+        <div class="ts-dual-controls">
+          <!-- noise scale -->
+          <div class="ts-control-box">
+            <div class="ts-control-split">
+              <span class="ts-control-prefix">scale</span>
+              <input type="number" min="0.5" max="32" step="0.5" class="ts-control-input" data-testid="param-noiseScale-input" value="6" />
+            </div>
+            <div class="ts-slider-row">
+              <input type="range" min="0.5" max="32" step="0.5" class="ts-slider" data-testid="param-noiseScale-slider" value="6" />
+              <button type="button" class="ts-reset-inline" data-testid="reset-noiseScale-btn" title="Reset noise scale">↺</button>
+            </div>
+          </div>
+
+          <!-- noise detail -->
+          <div class="ts-control-box">
+            <div class="ts-control-split">
+              <span class="ts-control-prefix">detail</span>
+              <input type="number" min="1" max="8" step="1" class="ts-control-input" data-testid="param-noiseDetail-input" value="4" />
+            </div>
+            <div class="ts-slider-row">
+              <input type="range" min="1" max="8" step="1" class="ts-slider" data-testid="param-noiseDetail-slider" value="4" />
+              <button type="button" class="ts-reset-inline" data-testid="reset-noiseDetail-btn" title="Reset noise detail">↺</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- noise contrast -->
+        <div class="ts-control-box">
+          <div class="ts-control-split">
+            <span class="ts-control-prefix">contrast</span>
+            <input type="number" min="0" max="4" step="0.05" class="ts-control-input" data-testid="param-noiseContrast-input" value="1" />
+          </div>
+          <div class="ts-slider-row">
+            <input type="range" min="0" max="4" step="0.05" class="ts-slider" data-testid="param-noiseContrast-slider" value="1" />
+            <button type="button" class="ts-reset-inline" data-testid="reset-noiseContrast-btn" title="Reset noise contrast">↺</button>
+          </div>
+        </div>
+      </section>
+
       <!-- ANIMATION (Figma 10:470) -->
       <section class="ts-param-group" data-testid="group-animation">
         <div class="ts-block-header">
@@ -396,6 +485,40 @@ export function mountTextureMosaicUI(
         </div>
       </section>
 
+      <!-- SATURATION FX CONTROLS (Spec §3 Saturation / FX group) -->
+      <section class="ts-param-group" data-testid="group-saturation">
+        <div class="ts-block-header">
+          <span class="ts-field-label">saturation</span>
+          <button type="button" class="ts-reset-inline" data-testid="reset-group-saturation-btn" title="Reset saturation controls">rst all</button>
+        </div>
+
+        <div class="ts-dual-controls">
+          <!-- min saturation -->
+          <div class="ts-control-box">
+            <div class="ts-control-split">
+              <span class="ts-control-prefix">min</span>
+              <input type="number" min="0" max="5" step="0.05" class="ts-control-input" data-testid="param-satMin-input" value="0" />
+            </div>
+            <div class="ts-slider-row">
+              <input type="range" min="0" max="5" step="0.05" class="ts-slider" data-testid="param-satMin-slider" value="0" />
+              <button type="button" class="ts-reset-inline" data-testid="reset-satMin-btn" title="Reset min saturation">↺</button>
+            </div>
+          </div>
+
+          <!-- max saturation -->
+          <div class="ts-control-box">
+            <div class="ts-control-split">
+              <span class="ts-control-prefix">max</span>
+              <input type="number" min="0" max="5" step="0.05" class="ts-control-input" data-testid="param-satMax-input" value="5" />
+            </div>
+            <div class="ts-slider-row">
+              <input type="range" min="0" max="5" step="0.05" class="ts-slider" data-testid="param-satMax-slider" value="5" />
+              <button type="button" class="ts-reset-inline" data-testid="reset-satMax-btn" title="Reset max saturation">↺</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- MASK CONTROLS (Figma 8:384 + Spec §3 Mask group) -->
       <section class="ts-param-group" data-testid="group-mask">
         <div class="ts-block-header">
@@ -461,7 +584,7 @@ export function mountTextureMosaicUI(
 
   const stackFileInput = q<HTMLInputElement>('stack-file-input');
 
-  // Wire all 3 media slots ('control', 'indexMap', 'mask') uniformly (D1 & D14)
+  // Wire all 4 media slots ('control', 'indexMap', 'satMap', 'mask') uniformly (D1 & D14)
   const bindMediaSlotUI = (target: MediaSlotTarget) => {
     const imgInput = q<HTMLInputElement>(`${target}-image-file-input`);
     const vidInput = q<HTMLInputElement>(`${target}-video-file-input`);
@@ -490,6 +613,12 @@ export function mountTextureMosaicUI(
         }
       }
     );
+    q<HTMLButtonElement>(`${target}-source-noise`).addEventListener(
+      'click',
+      () => {
+        engine.activateSlotMode(target, 'noise');
+      }
+    );
     q<HTMLDivElement>(`${target}-thumbnail-box`).addEventListener(
       'click',
       () => {
@@ -499,7 +628,9 @@ export function mountTextureMosaicUI(
             ? s.controlSource
             : target === 'indexMap'
               ? s.indexMapSource
-              : s.maskSource;
+              : target === 'satMap'
+                ? s.satMapSource
+                : s.maskSource;
         if (src.mode === 'video') {
           vidInput.click();
         } else {
@@ -541,8 +672,12 @@ export function mountTextureMosaicUI(
 
   bindMediaSlotUI('control');
   bindMediaSlotUI('indexMap');
+  bindMediaSlotUI('satMap');
   bindMediaSlotUI('mask');
 
+  q<HTMLButtonElement>('satMap-clear-btn').addEventListener('click', () => {
+    engine.clearSatMap();
+  });
   q<HTMLButtonElement>('mask-clear-btn').addEventListener('click', () => {
     engine.clearMask();
   });
@@ -638,10 +773,15 @@ export function mountTextureMosaicUI(
   bindContinuousParam('subdivMultiplier');
   bindContinuousParam('apexX');
   bindContinuousParam('apexY');
+  bindContinuousParam('noiseScale');
+  bindContinuousParam('noiseDetail');
+  bindContinuousParam('noiseContrast');
   bindContinuousParam('animSpeed');
   bindContinuousParam('contrast');
   bindContinuousParam('offset');
   bindContinuousParam('numImages');
+  bindContinuousParam('satMin');
+  bindContinuousParam('satMax');
   bindContinuousParam('maskInfluence');
   bindContinuousParam('maskMin');
   bindContinuousParam('maskMax');
@@ -690,6 +830,12 @@ export function mountTextureMosaicUI(
       engine.resetGroup('rotation');
     }
   );
+  q<HTMLButtonElement>('reset-group-noise-btn').addEventListener(
+    'click',
+    () => {
+      engine.resetGroup('noise');
+    }
+  );
   q<HTMLButtonElement>('reset-group-control-btn').addEventListener(
     'click',
     () => {
@@ -702,6 +848,12 @@ export function mountTextureMosaicUI(
       engine.resetGroup('shader');
     }
   );
+  q<HTMLButtonElement>('reset-group-saturation-btn').addEventListener(
+    'click',
+    () => {
+      engine.resetGroup('saturation');
+    }
+  );
   q<HTMLButtonElement>('reset-group-mask-btn').addEventListener('click', () => {
     engine.resetGroup('mask');
   });
@@ -711,6 +863,7 @@ export function mountTextureMosaicUI(
   let lastStackSignature = '';
   let lastControlThumbSig = '';
   let lastIndexMapThumbSig = '';
+  let lastSatMapThumbSig = '';
   let lastMaskThumbSig = '';
   let lastErrorsSig = '';
   let dragSourceIndex: number | null = null;
@@ -729,10 +882,22 @@ export function mountTextureMosaicUI(
       `;
     } else {
       box.classList.add('is-loaded');
-      box.innerHTML = `
-        <img src="${source.thumbnailUrl}" alt="${source.name}" data-testid="${thumbTestId}" />
-        <span class="ts-preview-badge">${source.name}</span>
-      `;
+      const existingImg = box.querySelector(
+        `[data-testid="${thumbTestId}"]`
+      ) as HTMLImageElement | null;
+      const existingBadge = box.querySelector(
+        '.ts-preview-badge'
+      ) as HTMLSpanElement | null;
+      if (existingImg && existingBadge) {
+        existingImg.src = source.thumbnailUrl;
+        existingImg.alt = source.name;
+        existingBadge.textContent = source.name;
+      } else {
+        box.innerHTML = `
+          <img src="${source.thumbnailUrl}" alt="${source.name}" data-testid="${thumbTestId}" />
+          <span class="ts-preview-badge">${source.name}</span>
+        `;
+      }
     }
   };
 
@@ -753,35 +918,26 @@ export function mountTextureMosaicUI(
       resHInput.value = String(state.workingHeight);
     }
 
-    // 2. Control, Index Map & Mask source button active states & thumbnails
+    // 2. Control, Index Map, Saturation Map & Mask source button active states & thumbnails
     const setActiveBtn = (testId: string, active: boolean) => {
       q<HTMLButtonElement>(testId).classList.toggle('is-primary', active);
     };
-    setActiveBtn(
-      'control-source-webcam',
-      state.controlSource.mode === 'webcam'
-    );
-    setActiveBtn('control-source-video', state.controlSource.mode === 'video');
-    setActiveBtn('control-source-image', state.controlSource.mode === 'image');
+    const syncSlotButtons = (
+      prefix: MediaSlotTarget,
+      mode: AppState['controlSource']['mode']
+    ) => {
+      setActiveBtn(`${prefix}-source-webcam`, mode === 'webcam');
+      setActiveBtn(`${prefix}-source-video`, mode === 'video');
+      setActiveBtn(`${prefix}-source-image`, mode === 'image');
+      setActiveBtn(`${prefix}-source-noise`, mode === 'noise');
+    };
 
-    setActiveBtn(
-      'indexMap-source-webcam',
-      state.indexMapSource.mode === 'webcam'
-    );
-    setActiveBtn(
-      'indexMap-source-video',
-      state.indexMapSource.mode === 'video'
-    );
-    setActiveBtn(
-      'indexMap-source-image',
-      state.indexMapSource.mode === 'image'
-    );
+    syncSlotButtons('control', state.controlSource.mode);
+    syncSlotButtons('indexMap', state.indexMapSource.mode);
+    syncSlotButtons('satMap', state.satMapSource.mode);
+    syncSlotButtons('mask', state.maskSource.mode);
 
-    setActiveBtn('mask-source-webcam', state.maskSource.mode === 'webcam');
-    setActiveBtn('mask-source-video', state.maskSource.mode === 'video');
-    setActiveBtn('mask-source-image', state.maskSource.mode === 'image');
-
-    const ctrlSig = `${state.controlSource.mode}:${state.controlSource.name}:${state.controlSource.thumbnailUrl.length}`;
+    const ctrlSig = `${state.controlSource.mode}:${state.controlSource.name}:${state.controlSource.thumbnailUrl}`;
     if (ctrlSig !== lastControlThumbSig) {
       lastControlThumbSig = ctrlSig;
       syncSlotPreview(
@@ -792,7 +948,7 @@ export function mountTextureMosaicUI(
       );
     }
 
-    const idxSig = `${state.indexMapSource.mode}:${state.indexMapSource.name}:${state.indexMapSource.thumbnailUrl.length}`;
+    const idxSig = `${state.indexMapSource.mode}:${state.indexMapSource.name}:${state.indexMapSource.thumbnailUrl}`;
     if (idxSig !== lastIndexMapThumbSig) {
       lastIndexMapThumbSig = idxSig;
       syncSlotPreview(
@@ -803,7 +959,18 @@ export function mountTextureMosaicUI(
       );
     }
 
-    const maskSig = `${state.maskSource.mode}:${state.maskSource.name}:${state.maskSource.thumbnailUrl.length}`;
+    const satSig = `${state.satMapSource.mode}:${state.satMapSource.name}:${state.satMapSource.thumbnailUrl}`;
+    if (satSig !== lastSatMapThumbSig) {
+      lastSatMapThumbSig = satSig;
+      syncSlotPreview(
+        q<HTMLDivElement>('satMap-thumbnail-box'),
+        state.satMapSource,
+        'satMap-thumbnail',
+        'add image'
+      );
+    }
+
+    const maskSig = `${state.maskSource.mode}:${state.maskSource.name}:${state.maskSource.thumbnailUrl}`;
     if (maskSig !== lastMaskThumbSig) {
       lastMaskThumbSig = maskSig;
       syncSlotPreview(
@@ -946,10 +1113,15 @@ export function mountTextureMosaicUI(
     syncSliderAndInput('subdivMultiplier', 2);
     syncSliderAndInput('apexX', 2);
     syncSliderAndInput('apexY', 2);
+    syncSliderAndInput('noiseScale', 2);
+    syncSliderAndInput('noiseDetail', 0);
+    syncSliderAndInput('noiseContrast', 2);
     syncSliderAndInput('animSpeed', 2);
     syncSliderAndInput('contrast', 2);
     syncSliderAndInput('offset', 3);
     syncSliderAndInput('numImages', 0, maxLoaded);
+    syncSliderAndInput('satMin', 2);
+    syncSliderAndInput('satMax', 2);
     syncSliderAndInput('maskInfluence', 2);
     syncSliderAndInput('maskMin', 2);
     syncSliderAndInput('maskMax', 2);
@@ -989,7 +1161,7 @@ export function mountTextureMosaicUI(
       q<HTMLInputElement | HTMLButtonElement>(id).disabled = maskDisabled;
     }
 
-    // 6. Playback transports — one per input media (Control, Index Map, Mask — D14)
+    // 6. Playback transports — one per input media (Control, Index Map, Sat Map, Mask — D14)
     const renderTransport = (
       prefix: MediaSlotTarget,
       source: AppState['controlSource'],
@@ -1029,7 +1201,12 @@ export function mountTextureMosaicUI(
         liveLabel.style.display = 'inline';
       } else {
         bar.classList.add('is-static');
-        statusLabel.textContent = source.mode === 'image' ? 'Image' : 'None';
+        statusLabel.textContent =
+          source.mode === 'image'
+            ? 'Image'
+            : source.mode === 'noise'
+              ? 'Noise'
+              : 'None';
         btn.disabled = true;
         btn.textContent = '▶';
         timeLabel.style.display = 'none';
@@ -1039,11 +1216,13 @@ export function mountTextureMosaicUI(
 
     renderTransport('control', state.controlSource, 'Video Input');
     renderTransport('indexMap', state.indexMapSource, 'Video Index');
+    renderTransport('satMap', state.satMapSource, 'Video Sat');
     renderTransport('mask', state.maskSource, 'Video Mask');
 
     q<HTMLButtonElement>('video-sync-btn').disabled = !(
       state.controlSource.mode === 'video' ||
       state.indexMapSource.mode === 'video' ||
+      state.satMapSource.mode === 'video' ||
       state.maskSource.mode === 'video'
     );
 

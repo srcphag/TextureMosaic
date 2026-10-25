@@ -1,6 +1,6 @@
 import fullscreenVertSrc from '../shaders/fullscreen.vert?raw';
 import mosaicFragSrc from '../shaders/texture_mosaic_web.frag?raw';
-import fxFragSrc from '../shaders/fx_passthrough.frag?raw';
+import fxSatFragSrc from '../shaders/fx_saturation.frag?raw';
 import {
   DEFAULT_WORKING_HEIGHT,
   DEFAULT_WORKING_WIDTH,
@@ -26,6 +26,8 @@ export class WebGLPipeline {
     WebGLTexture,
     WebGLTexture,
   ];
+  private satMapTex: WebGLTexture;
+  private fallbackSatMapTex: WebGLTexture;
   private maskTex: WebGLTexture;
   private fallbackMaskTex: WebGLTexture;
   private stackTex: WebGLTexture | null = null;
@@ -36,6 +38,7 @@ export class WebGLPipeline {
   private workingWidth: number = DEFAULT_WORKING_WIDTH;
   private workingHeight: number = DEFAULT_WORKING_HEIGHT;
   private allocatedStackLayers = 0;
+  private hasSatMapLoaded = false;
   private hasMaskLoaded = false;
 
   private fitCanvas: HTMLCanvasElement;
@@ -68,6 +71,9 @@ export class WebGLPipeline {
 
   private fxLocs: {
     uScene: WebGLUniformLocation | null;
+    uSatMap: WebGLUniformLocation | null;
+    uMinSaturation: WebGLUniformLocation | null;
+    uMaxSaturation: WebGLUniformLocation | null;
   };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -91,7 +97,7 @@ export class WebGLPipeline {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
     this.mosaicProgram = this.createProgram(fullscreenVertSrc, mosaicFragSrc);
-    this.fxProgram = this.createProgram(fullscreenVertSrc, fxFragSrc);
+    this.fxProgram = this.createProgram(fullscreenVertSrc, fxSatFragSrc);
 
     const vao = gl.createVertexArray();
     if (!vao) throw new Error('Failed to create WebGL2 VertexArrayObject.');
@@ -136,9 +142,12 @@ export class WebGLPipeline {
 
     this.fxLocs = {
       uScene: gl.getUniformLocation(this.fxProgram, 'uScene'),
+      uSatMap: gl.getUniformLocation(this.fxProgram, 'uSatMap'),
+      uMinSaturation: gl.getUniformLocation(this.fxProgram, 'uMinSaturation'),
+      uMaxSaturation: gl.getUniformLocation(this.fxProgram, 'uMaxSaturation'),
     };
 
-    // Spec §4: Texture filtering on control, mask and index maps is NEAREST
+    // Spec §4: Texture filtering on control, mask, saturation map and index maps is NEAREST
     this.controlTex = this.create2DTexture(gl.NEAREST);
     this.indexMapTexs = [
       this.create2DTexture(gl.NEAREST),
@@ -146,15 +155,23 @@ export class WebGLPipeline {
       this.create2DTexture(gl.NEAREST),
       this.create2DTexture(gl.NEAREST),
     ];
+    this.satMapTex = this.create2DTexture(gl.NEAREST);
+    this.fallbackSatMapTex = this.create2DTexture(gl.NEAREST);
     this.maskTex = this.create2DTexture(gl.NEAREST);
     this.fallbackMaskTex = this.create2DTexture(gl.NEAREST);
 
-    // Initialize 1x1 default white fallback mask, mid-grey control, and 1x1 index maps
+    // Initialize 1x1 default white fallback mask, 51/255 (= 0.2 -> satAmount = 1.0 at min=0, max=5) fallback satMap, and mid-grey control
     this.uploadRaw2D(
       this.fallbackMaskTex,
       1,
       1,
       new Uint8Array([255, 255, 255, 255])
+    );
+    this.uploadRaw2D(
+      this.fallbackSatMapTex,
+      1,
+      1,
+      new Uint8Array([51, 51, 51, 255])
     );
     this.uploadRaw2D(
       this.controlTex,
@@ -570,6 +587,47 @@ export class WebGLPipeline {
     }
   }
 
+  public uploadSatMapRaw(tex: RawTextureInput | null): void {
+    if (!tex) {
+      this.hasSatMapLoaded = false;
+      return;
+    }
+    this.hasSatMapLoaded = true;
+    this.uploadRaw2D(this.satMapTex, tex.width, tex.height, tex.data);
+  }
+
+  public uploadSatMapElement(
+    el: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | null,
+    width: number,
+    height: number
+  ): void {
+    const { gl } = this;
+    if (!el || width <= 0 || height <= 0) {
+      this.hasSatMapLoaded = false;
+      return;
+    }
+    this.hasSatMapLoaded = true;
+    if (el instanceof HTMLVideoElement) {
+      gl.bindTexture(gl.TEXTURE_2D, this.satMapTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, el);
+    } else {
+      this.fitCanvas.width = width;
+      this.fitCanvas.height = height;
+      this.fitCtx.fillStyle = '#000000';
+      this.fitCtx.fillRect(0, 0, width, height);
+      this.fitCtx.drawImage(el, 0, 0, width, height);
+      gl.bindTexture(gl.TEXTURE_2D, this.satMapTex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA8,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        this.fitCanvas
+      );
+    }
+  }
+
   public uploadMaskRaw(tex: RawTextureInput | null): void {
     if (!tex) {
       this.hasMaskLoaded = false;
@@ -706,7 +764,7 @@ export class WebGLPipeline {
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    // --- PASS 2: FX Stage (pass-through in v1) -> Screen Canvas (D5) ---
+    // --- PASS 2: FX Stage (Adaptive Saturation Control) -> Screen Canvas (D5) ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
     gl.useProgram(this.fxProgram);
@@ -714,6 +772,16 @@ export class WebGLPipeline {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
     gl.uniform1i(this.fxLocs.uScene, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(
+      gl.TEXTURE_2D,
+      this.hasSatMapLoaded ? this.satMapTex : this.fallbackSatMapTex
+    );
+    gl.uniform1i(this.fxLocs.uSatMap, 1);
+
+    gl.uniform1f(this.fxLocs.uMinSaturation, params.satMin);
+    gl.uniform1f(this.fxLocs.uMaxSaturation, params.satMax);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

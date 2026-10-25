@@ -2,15 +2,17 @@ export const MAX_STACK_LAYERS = 32;
 export const DEFAULT_WORKING_WIDTH = 1280;
 export const DEFAULT_WORKING_HEIGHT = 720;
 
-export type SourceMode = 'none' | 'image' | 'video' | 'webcam';
+export type SourceMode = 'none' | 'image' | 'video' | 'webcam' | 'noise';
 
-export type MediaSlotTarget = 'control' | 'indexMap' | 'mask';
+export type MediaSlotTarget = 'control' | 'indexMap' | 'satMap' | 'mask';
 
 export type ParamGroup =
   | 'grid'
   | 'rotation'
+  | 'noise'
   | 'shader'
   | 'control'
+  | 'saturation'
   | 'mask'
   | 'animation'
   | 'all';
@@ -28,6 +30,12 @@ export interface ShaderParams {
   apexX: number;
   /** Apex center Y in UV 0..1 (default: 0.5) -> uApexUV.y */
   apexY: number;
+  /** Perlin noise base frequency / scale 0.5..32 (default: 6) */
+  noiseScale: number;
+  /** Perlin noise octave count / detail 1..8 (default: 4) */
+  noiseDetail: number;
+  /** Perlin noise contrast around 0.5, 0..4 (default: 1) */
+  noiseContrast: number;
   /** 1..loaded (default: all loaded images, min 1) -> uNumImages */
   numImages: number;
   /** 0 = hard switch (from only), 1 = mix(from, to, t) (default: 1) -> uSmoothBlend */
@@ -44,6 +52,10 @@ export interface ShaderParams {
   cyclic: number;
   /** 0 = normal, 1 = invert control RGB before contrast/luma (default: 0) -> uInvertControl */
   invertControl: number;
+  /** 0..5 saturation multiplier where satMap = 0 (default: 0) -> uMinSaturation */
+  satMin: number;
+  /** 0..5 saturation multiplier where satMap = 1 (default: 5) -> uMaxSaturation */
+  satMax: number;
   /** 0..1 mask influence (default: 0 when no mask, 1 when mask loaded) -> uMaskInfluence */
   maskInfluence: number;
   /** 0 = normal, 1 = invert mask (default: 0) -> uInvertMask */
@@ -61,6 +73,9 @@ export const DEFAULT_SHADER_PARAMS: Readonly<ShaderParams> = {
   rotationMode: 0,
   apexX: 0.5,
   apexY: 0.5,
+  noiseScale: 6,
+  noiseDetail: 4,
+  noiseContrast: 1,
   numImages: 1,
   smoothBlend: 1,
   indexIsNormalized: 1,
@@ -69,6 +84,8 @@ export const DEFAULT_SHADER_PARAMS: Readonly<ShaderParams> = {
   animSpeed: 0,
   cyclic: 0,
   invertControl: 0,
+  satMin: 0,
+  satMax: 5,
   maskInfluence: 0,
   invertMask: 0,
   maskMin: 0,
@@ -111,7 +128,9 @@ export interface AppState {
   stack: StackLayerItem[];
   controlSource: MediaSourceState;
   indexMapSource: MediaSourceState;
+  satMapSource: MediaSourceState;
   maskSource: MediaSourceState;
+  hasSatMap: boolean;
   hasMask: boolean;
   errors: AppError[];
   statsVisible: boolean;
@@ -140,9 +159,11 @@ export interface TextureMosaicDebugAPI {
   resetParam(key: keyof ShaderParams): void;
   resetGroup(group: ParamGroup): void;
   initDefaultScene(): void;
+  activateSlotMode(target: MediaSlotTarget, mode: SourceMode): boolean;
   setWorkingResolution(width: number, height: number): void;
   setControlRaw(tex: RawTextureInput, name?: string): void;
   setIndexMapRaw(tex: RawTextureInput, name?: string): void;
+  setSatMapRaw(tex: RawTextureInput | null, name?: string): void;
   setMaskRaw(tex: RawTextureInput | null, name?: string): void;
   setStackRaw(layers: RawTextureInput[], names?: string[]): void;
   setIndexMapsRaw(maps: IndexMapsQuad): void;
@@ -155,6 +176,7 @@ export interface TextureMosaicDebugAPI {
   ): void;
   removeStackLayer(index: number): void;
   reorderStackLayer(fromIndex: number, toIndex: number): void;
+  clearSatMap(): void;
   clearMask(): void;
   stepClock(dtSeconds: number): void;
   setTabHiddenSimulated(hidden: boolean): void;

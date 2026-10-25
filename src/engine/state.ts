@@ -6,6 +6,8 @@ import {
   rawTextureToThumbnailUrl,
 } from './fixtures';
 import { WebGLPipeline } from './gl-pipeline';
+import { generatePerlinNoiseTexture } from './noise';
+import { SlotPreviewRenderer } from './previews';
 import {
   AppError,
   AppState,
@@ -22,19 +24,22 @@ import {
   SourceMode,
 } from './types';
 
+const NOISE_TEXTURE_SIZE = 256;
+
 interface StoredSlotMedia {
   imageElement: HTMLImageElement | HTMLCanvasElement | null;
   imageRaw: RawTextureInput | null;
   imageName: string;
-  imageThumb: string;
+  imageBaseRgba: Uint8ClampedArray | null;
 
   videoElement: HTMLVideoElement | null;
   videoUrl: string | null;
   videoName: string;
-  videoThumb: string;
+  videoBaseRgba: Uint8ClampedArray | null;
 
   webcamVideo: HTMLVideoElement | null;
   webcamStream: MediaStream | null;
+  webcamBaseRgba: Uint8ClampedArray | null;
 }
 
 function createEmptySlotMedia(): StoredSlotMedia {
@@ -42,13 +47,14 @@ function createEmptySlotMedia(): StoredSlotMedia {
     imageElement: null,
     imageRaw: null,
     imageName: '',
-    imageThumb: '',
+    imageBaseRgba: null,
     videoElement: null,
     videoUrl: null,
     videoName: '',
-    videoThumb: '',
+    videoBaseRgba: null,
     webcamVideo: null,
     webcamStream: null,
+    webcamBaseRgba: null,
   };
 }
 
@@ -68,18 +74,25 @@ function createEmptyMediaSourceState(): MediaSourceState {
 export class TextureMosaicEngine {
   public readonly pipeline: WebGLPipeline;
   private readonly clock: AnimationClock = new AnimationClock();
+  private readonly previewRenderer: SlotPreviewRenderer =
+    new SlotPreviewRenderer(96);
 
   private state: AppState;
   private listeners: Set<(state: AppState) => void> = new Set();
 
   private controlMedia: StoredSlotMedia = createEmptySlotMedia();
   private indexMapMedia: StoredSlotMedia = createEmptySlotMedia();
+  private satMapMedia: StoredSlotMedia = createEmptySlotMedia();
   private maskMedia: StoredSlotMedia = createEmptySlotMedia();
+
+  private currentNoiseTex: RawTextureInput;
+  private currentNoiseBaseRgba: Uint8ClampedArray;
 
   private activeIndexMaps: IndexMapsQuad;
 
   private rafId: number | null = null;
   private lastFrameRenderMs = performance.now();
+  private lastLivePreviewMs = 0;
   private smoothedFps = 60;
   private smoothedFrameMs = 16.7;
   private nextIdCounter = 1;
@@ -94,6 +107,16 @@ export class TextureMosaicEngine {
       defaultIdxTex,
     ];
 
+    this.currentNoiseTex = generatePerlinNoiseTexture(
+      NOISE_TEXTURE_SIZE,
+      NOISE_TEXTURE_SIZE,
+      DEFAULT_SHADER_PARAMS.noiseScale,
+      DEFAULT_SHADER_PARAMS.noiseDetail,
+      DEFAULT_SHADER_PARAMS.noiseContrast
+    );
+    this.currentNoiseBaseRgba =
+      this.previewRenderer.captureBaseSquareRGBAFromRaw(this.currentNoiseTex);
+
     this.state = {
       params: { ...DEFAULT_SHADER_PARAMS },
       workingWidth: DEFAULT_WORKING_WIDTH,
@@ -101,7 +124,9 @@ export class TextureMosaicEngine {
       stack: [],
       controlSource: createEmptyMediaSourceState(),
       indexMapSource: createEmptyMediaSourceState(),
+      satMapSource: createEmptyMediaSourceState(),
       maskSource: createEmptyMediaSourceState(),
+      hasSatMap: false,
       hasMask: false,
       errors: [],
       statsVisible: false,
@@ -125,13 +150,97 @@ export class TextureMosaicEngine {
   private getSlotMedia(target: MediaSlotTarget): StoredSlotMedia {
     if (target === 'control') return this.controlMedia;
     if (target === 'indexMap') return this.indexMapMedia;
+    if (target === 'satMap') return this.satMapMedia;
     return this.maskMedia;
   }
 
   private getSlotSourceState(target: MediaSlotTarget): MediaSourceState {
     if (target === 'control') return this.state.controlSource;
     if (target === 'indexMap') return this.state.indexMapSource;
+    if (target === 'satMap') return this.state.satMapSource;
     return this.state.maskSource;
+  }
+
+  /**
+   * Re-compute the processed preview thumbnail data URL for `target` using the current shader parameters.
+   */
+  private refreshSlotPreviewThumbnail(
+    target: MediaSlotTarget,
+    recaptureVideoFrame: boolean = false
+  ): void {
+    const srcState = this.getSlotSourceState(target);
+    const slot = this.getSlotMedia(target);
+
+    if (srcState.mode === 'none') {
+      srcState.thumbnailUrl = '';
+      return;
+    }
+
+    let baseRgba: Uint8ClampedArray | null = null;
+    if (srcState.mode === 'noise') {
+      baseRgba = this.currentNoiseBaseRgba;
+    } else if (srcState.mode === 'image') {
+      baseRgba = slot.imageBaseRgba;
+    } else if (srcState.mode === 'video') {
+      if (recaptureVideoFrame && slot.videoElement && slot.videoElement.readyState >= 2) {
+        slot.videoBaseRgba =
+          this.previewRenderer.captureBaseSquareRGBAFromElement(
+            slot.videoElement,
+            slot.videoElement.videoWidth || 320,
+            slot.videoElement.videoHeight || 180
+          );
+      }
+      baseRgba = slot.videoBaseRgba;
+    } else if (srcState.mode === 'webcam') {
+      if (recaptureVideoFrame && slot.webcamVideo && slot.webcamVideo.readyState >= 2) {
+        slot.webcamBaseRgba =
+          this.previewRenderer.captureBaseSquareRGBAFromElement(
+            slot.webcamVideo,
+            slot.webcamVideo.videoWidth || 640,
+            slot.webcamVideo.videoHeight || 480
+          );
+      }
+      baseRgba = slot.webcamBaseRgba;
+    }
+
+    if (baseRgba) {
+      srcState.thumbnailUrl = this.previewRenderer.processedRGBAToDataUrl(
+        target,
+        baseRgba,
+        this.state.params
+      );
+    }
+  }
+
+  /**
+   * Regenerate the shared Perlin noise texture from current `noiseScale`, `noiseDetail`, `noiseContrast`
+   * and re-upload to any slot currently in `'noise'` mode.
+   */
+  private regenerateNoiseSource(): void {
+    const p = this.state.params;
+    this.currentNoiseTex = generatePerlinNoiseTexture(
+      NOISE_TEXTURE_SIZE,
+      NOISE_TEXTURE_SIZE,
+      p.noiseScale,
+      p.noiseDetail,
+      p.noiseContrast
+    );
+    this.currentNoiseBaseRgba =
+      this.previewRenderer.captureBaseSquareRGBAFromRaw(this.currentNoiseTex);
+
+    const targets: MediaSlotTarget[] = [
+      'control',
+      'indexMap',
+      'satMap',
+      'mask',
+    ];
+    for (const target of targets) {
+      const src = this.getSlotSourceState(target);
+      if (src.mode === 'noise') {
+        this.uploadSlotRawToPipeline(target, this.currentNoiseTex);
+        this.refreshSlotPreviewThumbnail(target);
+      }
+    }
   }
 
   public subscribe(listener: (state: AppState) => void): () => void {
@@ -156,6 +265,7 @@ export class TextureMosaicEngine {
       stack: [...this.state.stack],
       controlSource: { ...this.state.controlSource },
       indexMapSource: { ...this.state.indexMapSource },
+      satMapSource: { ...this.state.satMapSource },
       maskSource: { ...this.state.maskSource },
       errors: [...this.state.errors],
     };
@@ -220,6 +330,8 @@ export class TextureMosaicEngine {
     const idxMap = makeDemoIndexMapTexture(128, 128);
     this.setIndexMapRaw(idxMap, 'default_index_map.png');
 
+    this.clearSatMap();
+
     const layers = makeDistinctStackLayers(
       6,
       this.state.workingWidth,
@@ -248,6 +360,7 @@ export class TextureMosaicEngine {
           controlVideo?: string;
           indexMapImage?: string;
           indexMapVideo?: string;
+          satMapImage?: string;
           maskImage?: string;
           stackImages?: string[];
         };
@@ -313,6 +426,11 @@ export class TextureMosaicEngine {
     let v = Number(value);
     if (Number.isNaN(v)) return;
 
+    let regenNoise = false;
+    let refreshControlThumb = false;
+    let refreshSatThumb = false;
+    let refreshMaskThumb = false;
+
     switch (key) {
       case 'gridSizeX':
       case 'gridSizeY':
@@ -328,38 +446,79 @@ export class TextureMosaicEngine {
       case 'apexY':
         v = Math.max(0, Math.min(1, v));
         break;
+      case 'noiseScale':
+        v = Math.max(0.5, Math.min(32, v));
+        regenNoise = true;
+        break;
+      case 'noiseDetail':
+        v = Math.max(1, Math.min(8, Math.round(v)));
+        regenNoise = true;
+        break;
+      case 'noiseContrast':
+        v = Math.max(0, Math.min(4, v));
+        regenNoise = true;
+        break;
       case 'numImages': {
         const maxImgs = Math.max(1, this.state.stack.length);
         v = Math.max(1, Math.min(maxImgs, Math.round(v)));
         break;
       }
       case 'smoothBlend':
-      case 'cyclic':
-      case 'invertMask':
-      case 'invertControl':
       case 'indexIsNormalized':
         v = v >= 0.5 ? 1 : 0;
         break;
+      case 'cyclic':
+      case 'invertControl':
+        v = v >= 0.5 ? 1 : 0;
+        refreshControlThumb = true;
+        break;
       case 'contrast':
         v = Math.max(0, Math.min(4, v));
+        refreshControlThumb = true;
         break;
       case 'offset':
         v = Math.max(0, Math.min(1, v));
+        refreshControlThumb = true;
         break;
       case 'animSpeed':
         v = Math.max(-1, Math.min(1, v));
         this.clock.reset();
         break;
+      case 'satMin':
+      case 'satMax':
+        v = Math.max(0, Math.min(5, v));
+        refreshSatThumb = true;
+        break;
       case 'maskInfluence':
         v = this.state.hasMask ? Math.max(0, Math.min(1, v)) : 0;
+        refreshMaskThumb = true;
+        break;
+      case 'invertMask':
+        v = v >= 0.5 ? 1 : 0;
+        refreshMaskThumb = true;
         break;
       case 'maskMin':
       case 'maskMax':
         v = Math.max(0, Math.min(1, v));
+        refreshMaskThumb = true;
         break;
     }
 
     this.state.params[key] = v as ShaderParams[K];
+
+    if (regenNoise) {
+      this.regenerateNoiseSource();
+    }
+    if (refreshControlThumb) {
+      this.refreshSlotPreviewThumbnail('control');
+    }
+    if (refreshSatThumb) {
+      this.refreshSlotPreviewThumbnail('satMap');
+    }
+    if (refreshMaskThumb) {
+      this.refreshSlotPreviewThumbnail('mask');
+    }
+
     this.renderNow();
     this.ensureLoopState();
     this.emit();
@@ -378,6 +537,7 @@ export class TextureMosaicEngine {
       this.state.params.offset = 0;
       this.state.params.animSpeed = 0;
       this.clock.reset();
+      this.refreshSlotPreviewThumbnail('control');
       this.renderNow();
       this.ensureLoopState();
       this.emit();
@@ -398,6 +558,12 @@ export class TextureMosaicEngine {
       this.state.params.apexX = DEFAULT_SHADER_PARAMS.apexX;
       this.state.params.apexY = DEFAULT_SHADER_PARAMS.apexY;
     }
+    if (group === 'noise' || group === 'all') {
+      this.state.params.noiseScale = DEFAULT_SHADER_PARAMS.noiseScale;
+      this.state.params.noiseDetail = DEFAULT_SHADER_PARAMS.noiseDetail;
+      this.state.params.noiseContrast = DEFAULT_SHADER_PARAMS.noiseContrast;
+      this.regenerateNoiseSource();
+    }
     if (group === 'shader' || group === 'all') {
       this.state.params.numImages = Math.max(1, this.state.stack.length);
       this.state.params.smoothBlend = DEFAULT_SHADER_PARAMS.smoothBlend;
@@ -411,17 +577,25 @@ export class TextureMosaicEngine {
       this.state.params.cyclic = DEFAULT_SHADER_PARAMS.cyclic;
       this.state.params.invertControl = DEFAULT_SHADER_PARAMS.invertControl;
       this.clock.reset();
+      this.refreshSlotPreviewThumbnail('control');
     }
     if (group === 'animation') {
       this.state.params.offset = 0;
       this.state.params.animSpeed = 0;
       this.clock.reset();
+      this.refreshSlotPreviewThumbnail('control');
+    }
+    if (group === 'saturation' || group === 'all') {
+      this.state.params.satMin = DEFAULT_SHADER_PARAMS.satMin;
+      this.state.params.satMax = DEFAULT_SHADER_PARAMS.satMax;
+      this.refreshSlotPreviewThumbnail('satMap');
     }
     if (group === 'mask' || group === 'all') {
       this.state.params.maskInfluence = this.state.hasMask ? 1 : 0;
       this.state.params.invertMask = DEFAULT_SHADER_PARAMS.invertMask;
       this.state.params.maskMin = DEFAULT_SHADER_PARAMS.maskMin;
       this.state.params.maskMax = DEFAULT_SHADER_PARAMS.maskMax;
+      this.refreshSlotPreviewThumbnail('mask');
     }
 
     this.renderNow();
@@ -448,7 +622,6 @@ export class TextureMosaicEngine {
       this.state.workingWidth = w;
       this.state.workingHeight = h;
 
-      // Re-fit and re-upload all stack layers to the new working resolution (D4)
       for (const item of this.state.stack) {
         if (item.sourceElement) {
           item.rgbaData = this.pipeline.coverFitAndFlattenOverBlack(
@@ -701,17 +874,17 @@ export class TextureMosaicEngine {
     });
   }
 
-  // --- CONTROL, INDEX MAP & MASK SOURCES ---
+  // --- CONTROL, INDEX MAP, SATURATION MAP & MASK SOURCES ---
 
   public setControlRaw(
     tex: RawTextureInput,
     name: string = 'raw_control.png'
   ): void {
-    const thumb = rawTextureToThumbnailUrl(tex);
+    const baseRgba = this.previewRenderer.captureBaseSquareRGBAFromRaw(tex);
     this.controlMedia.imageRaw = tex;
     this.controlMedia.imageElement = null;
     this.controlMedia.imageName = name;
-    this.controlMedia.imageThumb = thumb;
+    this.controlMedia.imageBaseRgba = baseRgba;
 
     this.pipeline.uploadControlRaw(tex);
     this.state.controlSource = {
@@ -719,7 +892,11 @@ export class TextureMosaicEngine {
       name,
       width: tex.width,
       height: tex.height,
-      thumbnailUrl: thumb,
+      thumbnailUrl: this.previewRenderer.processedRGBAToDataUrl(
+        'control',
+        baseRgba,
+        this.state.params
+      ),
       playing: false,
       currentTime: 0,
       duration: 0,
@@ -733,11 +910,11 @@ export class TextureMosaicEngine {
     tex: RawTextureInput,
     name: string = 'raw_index_map.png'
   ): void {
-    const thumb = rawTextureToThumbnailUrl(tex);
+    const baseRgba = this.previewRenderer.captureBaseSquareRGBAFromRaw(tex);
     this.indexMapMedia.imageRaw = tex;
     this.indexMapMedia.imageElement = null;
     this.indexMapMedia.imageName = name;
-    this.indexMapMedia.imageThumb = thumb;
+    this.indexMapMedia.imageBaseRgba = baseRgba;
 
     const copy = {
       width: tex.width,
@@ -751,11 +928,67 @@ export class TextureMosaicEngine {
       name,
       width: tex.width,
       height: tex.height,
-      thumbnailUrl: thumb,
+      thumbnailUrl: this.previewRenderer.processedRGBAToDataUrl(
+        'indexMap',
+        baseRgba,
+        this.state.params
+      ),
       playing: false,
       currentTime: 0,
       duration: 0,
     };
+    this.renderNow();
+    this.ensureLoopState();
+    this.emit();
+  }
+
+  public setSatMapRaw(
+    tex: RawTextureInput | null,
+    name: string = 'raw_sat_map.png'
+  ): void {
+    if (!tex) {
+      this.clearSatMap();
+      return;
+    }
+    const baseRgba = this.previewRenderer.captureBaseSquareRGBAFromRaw(tex);
+    this.satMapMedia.imageRaw = tex;
+    this.satMapMedia.imageElement = null;
+    this.satMapMedia.imageName = name;
+    this.satMapMedia.imageBaseRgba = baseRgba;
+
+    this.state.hasSatMap = true;
+    this.pipeline.uploadSatMapRaw(tex);
+    this.state.satMapSource = {
+      mode: 'image',
+      name,
+      width: tex.width,
+      height: tex.height,
+      thumbnailUrl: this.previewRenderer.processedRGBAToDataUrl(
+        'satMap',
+        baseRgba,
+        this.state.params
+      ),
+      playing: false,
+      currentTime: 0,
+      duration: 0,
+    };
+    this.renderNow();
+    this.ensureLoopState();
+    this.emit();
+  }
+
+  public clearSatMap(): void {
+    const slot = this.satMapMedia;
+    if (slot.videoElement) {
+      slot.videoElement.pause();
+    }
+    if (slot.webcamStream) {
+      slot.webcamStream.getTracks().forEach((t) => t.stop());
+      slot.webcamStream = null;
+    }
+    this.state.hasSatMap = false;
+    this.state.satMapSource = createEmptyMediaSourceState();
+    this.pipeline.uploadSatMapRaw(null);
     this.renderNow();
     this.ensureLoopState();
     this.emit();
@@ -769,11 +1002,11 @@ export class TextureMosaicEngine {
       this.clearMask();
       return;
     }
-    const thumb = rawTextureToThumbnailUrl(tex);
+    const baseRgba = this.previewRenderer.captureBaseSquareRGBAFromRaw(tex);
     this.maskMedia.imageRaw = tex;
     this.maskMedia.imageElement = null;
     this.maskMedia.imageName = name;
-    this.maskMedia.imageThumb = thumb;
+    this.maskMedia.imageBaseRgba = baseRgba;
 
     const wasEmpty = !this.state.hasMask;
     this.state.hasMask = true;
@@ -786,7 +1019,11 @@ export class TextureMosaicEngine {
       name,
       width: tex.width,
       height: tex.height,
-      thumbnailUrl: thumb,
+      thumbnailUrl: this.previewRenderer.processedRGBAToDataUrl(
+        'mask',
+        baseRgba,
+        this.state.params
+      ),
       playing: false,
       currentTime: 0,
       duration: 0,
@@ -827,12 +1064,12 @@ export class TextureMosaicEngine {
       img instanceof HTMLImageElement
         ? img.naturalHeight || img.height
         : img.height;
-    const thumb = this.createElementThumbnail(img, w, h);
     const slot = this.getSlotMedia(target);
     slot.imageElement = img;
     slot.imageRaw = null;
     slot.imageName = name;
-    slot.imageThumb = thumb;
+    slot.imageBaseRgba =
+      this.previewRenderer.captureBaseSquareRGBAFromElement(img, w, h);
 
     this.activateSlotMode(target, 'image');
   }
@@ -922,11 +1159,12 @@ export class TextureMosaicEngine {
     slot.videoElement = video;
     slot.videoUrl = url;
     slot.videoName = name;
-    slot.videoThumb = this.createElementThumbnail(
-      video,
-      video.videoWidth || 320,
-      video.videoHeight || 180
-    );
+    slot.videoBaseRgba =
+      this.previewRenderer.captureBaseSquareRGBAFromElement(
+        video,
+        video.videoWidth || 320,
+        video.videoHeight || 180
+      );
 
     if (activateImmediately) {
       this.activateSlotMode(target, 'video');
@@ -971,6 +1209,12 @@ export class TextureMosaicEngine {
       }
       slot.webcamStream = stream;
       slot.webcamVideo = video;
+      slot.webcamBaseRgba =
+        this.previewRenderer.captureBaseSquareRGBAFromElement(
+          video,
+          video.videoWidth || 640,
+          video.videoHeight || 480
+        );
       this.activateSlotMode(target, 'webcam');
       return true;
     } catch (err) {
@@ -993,6 +1237,8 @@ export class TextureMosaicEngine {
       this.pipeline.uploadControlElement(el, w, h);
     } else if (target === 'indexMap') {
       this.pipeline.uploadIndexMapElement(el, w, h);
+    } else if (target === 'satMap') {
+      this.pipeline.uploadSatMapElement(el, w, h);
     } else {
       this.pipeline.uploadMaskElement(el, w, h);
     }
@@ -1007,6 +1253,8 @@ export class TextureMosaicEngine {
     } else if (target === 'indexMap') {
       this.activeIndexMaps = [tex, tex, tex, tex];
       this.pipeline.uploadIndexMapRaw(tex);
+    } else if (target === 'satMap') {
+      this.pipeline.uploadSatMapRaw(tex);
     } else {
       this.pipeline.uploadMaskRaw(tex);
     }
@@ -1018,6 +1266,34 @@ export class TextureMosaicEngine {
   ): boolean {
     const slot = this.getSlotMedia(target);
     const prevState = this.getSlotSourceState(target);
+
+    if (mode === 'noise') {
+      if (slot.videoElement) slot.videoElement.pause();
+      if (target === 'mask' && !this.state.hasMask) {
+        this.state.hasMask = true;
+        this.state.params.maskInfluence = 1; // Spec D11
+      }
+      if (target === 'satMap') {
+        this.state.hasSatMap = true;
+      }
+      this.uploadSlotRawToPipeline(target, this.currentNoiseTex);
+      const nextSource: MediaSourceState = {
+        mode: 'noise',
+        name: 'Perlin Noise',
+        width: this.currentNoiseTex.width,
+        height: this.currentNoiseTex.height,
+        thumbnailUrl: this.previewRenderer.processedRGBAToDataUrl(
+          target,
+          this.currentNoiseBaseRgba,
+          this.state.params
+        ),
+        playing: false,
+        currentTime: 0,
+        duration: 0,
+      };
+      this.applySlotState(target, nextSource);
+      return true;
+    }
 
     if (mode === 'image') {
       if (!slot.imageElement && !slot.imageRaw) {
@@ -1043,12 +1319,24 @@ export class TextureMosaicEngine {
         this.uploadSlotRawToPipeline(target, slot.imageRaw);
       }
 
+      if (target === 'mask' && !this.state.hasMask) {
+        this.state.hasMask = true;
+        this.state.params.maskInfluence = 1;
+      }
+      const thumb = slot.imageBaseRgba
+        ? this.previewRenderer.processedRGBAToDataUrl(
+            target,
+            slot.imageBaseRgba,
+            this.state.params
+          )
+        : '';
+
       const nextSource: MediaSourceState = {
         mode: 'image',
         name: slot.imageName,
         width: w,
         height: h,
-        thumbnailUrl: slot.imageThumb,
+        thumbnailUrl: thumb,
         playing: false,
         currentTime: 0,
         duration: 0,
@@ -1066,12 +1354,23 @@ export class TextureMosaicEngine {
       const h = v.videoHeight || 360;
       v.play().catch(() => {});
       this.uploadSlotElementToPipeline(target, v, w, h);
+      if (target === 'mask' && !this.state.hasMask) {
+        this.state.hasMask = true;
+        this.state.params.maskInfluence = 1;
+      }
+      const thumb = slot.videoBaseRgba
+        ? this.previewRenderer.processedRGBAToDataUrl(
+            target,
+            slot.videoBaseRgba,
+            this.state.params
+          )
+        : '';
       const nextSource: MediaSourceState = {
         mode: 'video',
         name: slot.videoName,
         width: w,
         height: h,
-        thumbnailUrl: slot.videoThumb,
+        thumbnailUrl: thumb,
         playing: !v.paused,
         currentTime: v.currentTime || 0,
         duration: Number.isFinite(v.duration) ? v.duration : 0,
@@ -1088,8 +1387,18 @@ export class TextureMosaicEngine {
       const v = slot.webcamVideo;
       const w = v.videoWidth || 640;
       const h = v.videoHeight || 480;
-      const thumb = this.createElementThumbnail(v, w, h);
+      slot.webcamBaseRgba =
+        this.previewRenderer.captureBaseSquareRGBAFromElement(v, w, h);
       this.uploadSlotElementToPipeline(target, v, w, h);
+      if (target === 'mask' && !this.state.hasMask) {
+        this.state.hasMask = true;
+        this.state.params.maskInfluence = 1;
+      }
+      const thumb = this.previewRenderer.processedRGBAToDataUrl(
+        target,
+        slot.webcamBaseRgba,
+        this.state.params
+      );
       const nextSource: MediaSourceState = {
         mode: 'webcam',
         name: 'Webcam Live',
@@ -1104,6 +1413,10 @@ export class TextureMosaicEngine {
       return true;
     }
 
+    if (prevState.mode !== 'none' && target === 'satMap') {
+      this.clearSatMap();
+      return true;
+    }
     if (prevState.mode !== 'none' && target === 'mask') {
       this.clearMask();
       return true;
@@ -1119,6 +1432,9 @@ export class TextureMosaicEngine {
       this.state.controlSource = nextSource;
     } else if (target === 'indexMap') {
       this.state.indexMapSource = nextSource;
+    } else if (target === 'satMap') {
+      this.state.hasSatMap = nextSource.mode !== 'none';
+      this.state.satMapSource = nextSource;
     } else {
       const wasEmpty = !this.state.hasMask;
       this.state.hasMask = nextSource.mode !== 'none';
@@ -1165,6 +1481,7 @@ export class TextureMosaicEngine {
     activeVideo.currentTime = clamped * activeVideo.duration;
     this.syncVideoTransportState();
     this.uploadDynamicVideoTextures();
+    this.refreshSlotPreviewThumbnail(target, true);
     this.renderNow();
     this.emit();
   }
@@ -1174,6 +1491,7 @@ export class TextureMosaicEngine {
     for (const slot of [
       this.controlMedia,
       this.indexMapMedia,
+      this.satMapMedia,
       this.maskMedia,
     ]) {
       if (slot.videoElement) {
@@ -1191,7 +1509,12 @@ export class TextureMosaicEngine {
   }
 
   private syncVideoTransportState(): void {
-    const targets: MediaSlotTarget[] = ['control', 'indexMap', 'mask'];
+    const targets: MediaSlotTarget[] = [
+      'control',
+      'indexMap',
+      'satMap',
+      'mask',
+    ];
     for (const target of targets) {
       const src = this.getSlotSourceState(target);
       const slot = this.getSlotMedia(target);
@@ -1205,7 +1528,12 @@ export class TextureMosaicEngine {
   }
 
   private uploadDynamicVideoTextures(): void {
-    const targets: MediaSlotTarget[] = ['control', 'indexMap', 'mask'];
+    const targets: MediaSlotTarget[] = [
+      'control',
+      'indexMap',
+      'satMap',
+      'mask',
+    ];
     for (const target of targets) {
       const src = this.getSlotSourceState(target);
       const slot = this.getSlotMedia(target);
@@ -1240,7 +1568,12 @@ export class TextureMosaicEngine {
   private shouldAnimateLoop(): boolean {
     if (this.clock.isHidden()) return false;
     if (this.state.params.animSpeed !== 0) return true;
-    const targets: MediaSlotTarget[] = ['control', 'indexMap', 'mask'];
+    const targets: MediaSlotTarget[] = [
+      'control',
+      'indexMap',
+      'satMap',
+      'mask',
+    ];
     for (const target of targets) {
       const src = this.getSlotSourceState(target);
       const slot = this.getSlotMedia(target);
@@ -1283,6 +1616,26 @@ export class TextureMosaicEngine {
         this.advanceAnimationsByDt(dt);
         this.uploadDynamicVideoTextures();
         this.syncVideoTransportState();
+
+        // Throttle live preview thumbnail refreshes during RAF to ~6 fps so playback stays smooth
+        if (now - this.lastLivePreviewMs >= 160) {
+          this.lastLivePreviewMs = now;
+          if (this.state.params.animSpeed !== 0) {
+            this.refreshSlotPreviewThumbnail('control', true);
+          }
+          for (const target of [
+            'control',
+            'indexMap',
+            'satMap',
+            'mask',
+          ] as MediaSlotTarget[]) {
+            const src = this.getSlotSourceState(target);
+            if (src.mode === 'video' || src.mode === 'webcam') {
+              this.refreshSlotPreviewThumbnail(target, true);
+            }
+          }
+        }
+
         this.renderNow(now);
         this.emit();
         if (this.shouldAnimateLoop()) {
@@ -1305,6 +1658,9 @@ export class TextureMosaicEngine {
     if (this.clock.isHidden()) return;
     this.clock.reset();
     this.advanceAnimationsByDt(dtSeconds);
+    if (this.state.params.animSpeed !== 0 && dtSeconds > 0) {
+      this.refreshSlotPreviewThumbnail('control');
+    }
     this.uploadDynamicVideoTextures();
     this.renderNow();
     this.ensureLoopState();

@@ -117,7 +117,8 @@ export function evaluateShaderPixelCPU(
   maskTex: RawTextureInput | null,
   stackLayers: RawTextureInput[],
   params: ShaderParams,
-  indexMaps?: IndexMapsQuad
+  indexMaps?: IndexMapsQuad,
+  satMapTex: RawTextureInput | null = null
 ): [number, number, number, number] {
   const loadedCount = Math.max(stackLayers.length, 1);
   const n = Math.max(Math.min(Math.floor(params.numImages), loadedCount), 1);
@@ -272,10 +273,29 @@ export function evaluateShaderPixelCPU(
   const outG = mix(origG, mosaicG, m);
   const outB = mix(origB, mosaicB, m);
 
+  // Intermediate RGBA8 FBO quantization (uScene in Pass 2)
+  const sceneR = clamp(Math.round(outR * 255), 0, 255) / 255;
+  const sceneG = clamp(Math.round(outG * 255), 0, 255) / 255;
+  const sceneB = clamp(Math.round(outB * 255), 0, 255) / 255;
+
+  // --- 8. Pass 2 FX Stage: Adaptive Saturation Control ---
+  // Empty satMap uses fallback byte 51 (51/255 = 0.2), so mix(0, 5, 0.2) = 1.0 (no change)
+  const satMaskValue = satMapTex
+    ? sampleNearestRGBA(satMapTex, u, v)[0]
+    : 51 / 255;
+  const satMin = params.satMin ?? 0;
+  const satMax = params.satMax ?? 5;
+  const satAmount = mix(satMin, satMax, satMaskValue);
+
+  const sceneLuma = sceneR * LUMA_R + sceneG * LUMA_G + sceneB * LUMA_B;
+  const finalR = clamp(mix(sceneLuma, sceneR, satAmount), 0.0, 1.0);
+  const finalG = clamp(mix(sceneLuma, sceneG, satAmount), 0.0, 1.0);
+  const finalB = clamp(mix(sceneLuma, sceneB, satAmount), 0.0, 1.0);
+
   return [
-    clamp(Math.round(outR * 255), 0, 255),
-    clamp(Math.round(outG * 255), 0, 255),
-    clamp(Math.round(outB * 255), 0, 255),
+    clamp(Math.round(finalR * 255), 0, 255),
+    clamp(Math.round(finalG * 255), 0, 255),
+    clamp(Math.round(finalB * 255), 0, 255),
     255,
   ];
 }
@@ -290,7 +310,8 @@ export function renderShaderBufferCPU(
   maskTex: RawTextureInput | null,
   stackLayers: RawTextureInput[],
   params: ShaderParams,
-  indexMaps?: IndexMapsQuad
+  indexMaps?: IndexMapsQuad,
+  satMapTex: RawTextureInput | null = null
 ): Uint8Array {
   const maps =
     indexMaps ??
@@ -314,7 +335,8 @@ export function renderShaderBufferCPU(
         maskTex,
         stackLayers,
         params,
-        maps
+        maps,
+        satMapTex
       );
       const idx = (y * width + x) * 4;
       out[idx] = r;

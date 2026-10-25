@@ -6,13 +6,14 @@ New project spec. Modeled on `texture-stack-spec-v0.7.md` (TextureStack). The te
 Reference files:
 - `texture_mosaic.frag` — TouchDesigner shader. **Source of truth** for the mosaic behavior.
 - `texture_mosaic_web.frag` — WebGL2 port of it. Reference implementation for the app.
+- `saturation_control_pixel.glsl` (`src/shaders/fx_saturation.frag`) — WebGL2 port of the Adaptive Saturation Control FX pass.
 - The **TextureStack** project (same repository family) — reference implementation for the app architecture, testing harness, Figma UI (`TextureStack` Figma file) and `letieu/terminal.css` library. Reuse its structure where it applies.
 
 ---
 
 ## 1. Goal
 
-A web interface that runs the Texture Mosaic GLSL shader live. The canvas is split into a **base grid** of cells. A **control map** (video, webcam or image) picks, per base cell, a subdivision level `L` (0–3) using its luminance: each base cell subdivides into `factor × factor` sub-cells where `factor = multiplier^L`. Each sub-cell shows one thumbnail from an image **stack**, chosen by a per-level **index map** (`R = from`, `G = to`, `B = crossfade t`), optionally rotated per cell toward an **apex** point. An optional **mask** (video or image) mixes the original control image back in. The result goes through an FX stage (empty in v1) and is drawn on a canvas. The web app is deployed and published on Netlify.
+A web interface that runs the Texture Mosaic GLSL shader live. The canvas is split into a **base grid** of cells. A **control map** (video, webcam or image) picks, per base cell, a subdivision level `L` (0–3) using its luminance: each base cell subdivides into `factor × factor` sub-cells where `factor = multiplier^L`. Each sub-cell shows one thumbnail from an image **stack**, chosen by a per-level **index map** (`R = from`, `G = to`, `B = crossfade t`), optionally rotated per cell toward an **apex** point. An optional **mask** (video or image) mixes the original control image back in. The result goes through an **Adaptive Saturation Control FX stage** driven by an optional **saturation map** (`0 → min sat`, `1 → max sat`, empty = `1.0` untouched) and is drawn on a canvas. The web app is deployed and published on Netlify.
 
 It is an artistic tool. The agent proves it works. The user judges how it looks and feels.
 
@@ -32,24 +33,24 @@ It is an artistic tool. The agent proves it works. The user judges how it looks 
 
 ## 3. Behavior
 
-Pipeline: **control source** (switch video/image/webcam) + **index map source** (switch video/image/webcam, mapped to all 4 `uIndexMap0..3`) + **stack** (n thumbnail images) + **mask source** (switch video/image/webcam, optional) + **UI controls** → shader → FX stage → render canvas.
+Pipeline: **control source** (switch video/image/webcam/noise) + **index map source** (switch video/image/webcam/noise, mapped to all 4 `uIndexMap0..3`) + **stack** (n thumbnail images) + **mask source** (switch video/image/webcam/noise, optional) + **saturation map source** (switch video/image/webcam/noise, optional) + **UI controls** → mosaic shader → FX saturation stage → render canvas.
 
 | # | Decision |
 |---|---|
-| D1 | Control, index map, and mask each have their own video/image/webcam switch. Switching does not reload the page. Loaded video files loop. |
+| D1 | Control, index map, saturation map, and mask each have their own video/image/webcam/noise switch. Switching does not reload the page. Loaded video files loop. |
 | D2 | The stack is an ordered list of thumbnail images: add many, remove, reorder. Order = layer index. Maximum 32. |
 | D3 | `num images` defaults to all loaded images and can be lowered. The shader only uses the first n. |
-| D4 | One **working resolution** for the whole app (default 1280×720, selectable). Stack images are cover-fitted to it when loaded. Control, mask and index maps are sampled in normalized UV, so they stretch to the canvas. |
-| D5 | The FX stage exists as a real pass, and is pass-through in v1. |
+| D4 | One **working resolution** for the whole app (default 1280×720, selectable). Stack images are cover-fitted to it when loaded. Control, mask, saturation map, and index maps are sampled in normalized UV, so they stretch to the canvas. |
+| D5 | The FX stage runs the **Adaptive Saturation Control** pass (`fx_saturation.frag`, ported from `saturation_control_pixel.glsl`), feeding the mosaic pass FBO output into `uScene` (input 0) and the saturation map into `uSatMap` (input 1). Pass-through is removed. When no saturation map is loaded, a neutral fallback (`51/255 = 0.2`, where `mix(0, 5, 0.2) = 1.0`) leaves saturation at `1.0` (no change). |
 | D6 | Live render: updates every frame while any video/webcam plays or the offset animation speed is not 0; otherwise only when something changes. |
 | D7 | PNG snapshot at working resolution. |
-| D8 | All controls update in real time, are grouped (Grid / Rotation / Control / Shader / Mask), and each has reset-to-default. Small thumbnails show the control, index map, and mask inputs. |
+| D8 | All controls update in real time, are grouped (Grid / Rotation / Noise / Control / Shader / Saturation / Mask), and each has reset-to-default. Input preview thumbnails show the **processed** signal in real time (Control: grayscale level-driving signal with invert/contrast/luminance/offset; Saturation map: `mix(min, max, r)` multiplier; Mask: remapped `m` factor with min/max/invert/influence; Noise slots: current Perlin noise). |
 | D9 | Errors (unsupported file, shader failure, no GPU support, too many images) are visible in the UI, never only in the console. |
 | D10 | The look of the UI is defined by the Figma file (§7). |
 | D11 | With no mask loaded, the mask controls are disabled and the app sets `uMaskInfluence = 0`. When a mask is loaded, influence defaults to 1. |
 | D12 | The offset can be animated in v1: one linear animation with a single speed control (see "Offset animation" below). |
 | D13 | The output is always opaque. Images with transparency are flattened over black when loaded, and the shader outputs alpha 1. The PNG snapshot has no transparency. |
-| D14 | The bottom playback bar has one transport per input (control left, index map center, mask right): video shows play/pause, progress and time; webcam shows a red track and `Live`; image/empty shows a static grey track. A **sync** button (Parameters column) restarts all loaded videos from 0; newly loaded videos always start at time 0. |
+| D14 | The bottom playback bar has one transport per input (control, index map, saturation map, mask): video shows play/pause, progress and time; webcam shows a red track and `Live`; image/empty shows a static grey track. A **sync** button (Parameters column) restarts all loaded videos from 0; newly loaded videos always start at time 0. |
 | D15 | The **index map input** (video/image/webcam) is bound to all 4 shader index map samplers (`uIndexMap0..uIndexMap3`). Per fine cell, RGB = `(fromIdx, toIdx, t)`, all normalized 0..1 (`uIndexIsNormalized = 1` in the app). A default procedural index map is loaded on startup so the mosaic renders out of the box until the user loads an image, video, or webcam into the index map input. |
 
 ### Parameters
@@ -62,12 +63,17 @@ Pipeline: **control source** (switch video/image/webcam) + **index map source** 
 | rotation mode | `uRotationMode` | int | 0/1/2 | 0 | 0 = off, 1 = continuous radial to apex, 2 = 4-face 90° snap |
 | apex x | `uApexUV.x` | float | 0..1 | 0.5 | Apex center X (UV) |
 | apex y | `uApexUV.y` | float | 0..1 | 0.5 | Apex center Y (UV) |
+| noise scale | `noiseScale` (app) | float | 0.5..32 | 6 | Perlin noise base frequency |
+| noise detail | `noiseDetail` (app) | int | 1..8 | 4 | Perlin noise fBm octave count |
+| noise contrast | `noiseContrast` (app) | float | 0..4 | 1 | Perlin noise contrast around 0.5 |
 | num images | `uNumImages` | int | 1..loaded | all | Thumbnails in use |
 | smooth blend | `uSmoothBlend` | float 0/1 | 0/1 | 1 | `mix(from, to, t)` (1) vs hard switch showing `from` (0) |
 | contrast | `uContrast` | float | 0..4 | 1 | Control contrast before the level lookup; 0 = flat grey |
 | offset | `uOffset` | float | 0..1 | 0 | Added to control luminance; driven by speed animation |
 | cyclic | `uCyclic` | float 0/1 | 0/1 | 0 | Levels wrap 0→1→2→3→0 (1) or clamp (0) |
 | invert color | `uInvertControl` | float 0/1 | 0/1 | 0 | Invert control RGB before contrast |
+| min sat | `uMinSaturation` | float | 0..5 | 0 | Saturation multiplier where saturation map = 0 (0 = grayscale, 1 = unchanged) |
+| max sat | `uMaxSaturation` | float | 0..5 | 5 | Saturation multiplier where saturation map = 1 (>1 = oversaturated) |
 | mask influence | `uMaskInfluence` | float | 0..1 | 1 (0 with no mask) | 0 = mask ignored, 1 = fully applied |
 | invert mask | `uInvertMask` | float 0/1 | 0/1 | 0 | Flip the mask |
 | mask min | `uMaskMin` | float | 0..1 | 0 | Mask values at or below this become 0 |
@@ -105,7 +111,8 @@ The behavior below is fixed and matches `texture_mosaic.frag`. Whatever API the 
 4. Apex rotation: with `rotation mode` off, `sampleUV = subLocalUV`. Mode 1: rotate so the cell's +Y points toward `apexUV` (continuous). Mode 2: snap to the dominant axis (N/S/E/W). See `texture_mosaic_web.frag` step 4 for the exact matrix.
 5. Index lookup & sampling: sample the level-`L` index map at `fineUV`; decode `from = clamp(floor(R · (n−1) + 0.5), 0, n−1)`, `to` likewise, `t = clamp(B, 0, 1)`. Sample stack layers `from` and `to` at `sampleUV`. Mosaic = `mix(from, to, t)` when `smooth blend` is on, else `from` only.
 6. Mask: same as TextureStack — `m_raw` = luminance of the mask pixel, remap with `lo/hi = min/max(maskMin, maskMax)`, invert, `m = mix(1, mask, clamp(influence, 0, 1))`.
-7. `original` = `(control at uv).rgb`, **without** contrast or offset. Output RGB = `mix(original.rgb, mosaic.rgb, m)`, alpha = 1. Mask white shows the mosaic, mask black shows the original control image.
+7. `original` = `(control at uv).rgb`, **without** contrast or offset. Mosaic pass output RGB = `mix(original.rgb, mosaic.rgb, m)`, alpha = 1. Mask white shows the mosaic, mask black shows the original control image.
+8. **FX Saturation pass (`fx_saturation.frag`):** samples the mosaic FBO (`uScene`) and the saturation map (`uSatMap.r`, or `51/255 = 0.2` when empty). Computes `satAmount = mix(uMinSaturation, uMaxSaturation, maskValue)`, perceptual luminance `luma = dot(srcColor.rgb, (0.2126, 0.7152, 0.0722))`, and outputs `clamp(mix(vec3(luma), srcColor.rgb, satAmount), 0, 1)` with alpha = 1.
 
 **Rules**
 
