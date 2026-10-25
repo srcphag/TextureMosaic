@@ -97,3 +97,12 @@ Measured in Desktop Chrome with WebGL2 at `1280×720` working resolution, `60×6
 
 - **Physical webcam hardware stream:** The `webcam` transport and `getUserMedia` flow are verified end-to-end using Chrome's fake media device (`--use-fake-device-for-media-stream`); a physical camera was not tested in automation.
 - **Sustained dual-video hardware decoding on battery/mid-range laptop GPU:** Single-tab Chrome WebGL2 rendering takes `~0.29 ms/frame`, but real-world thermal/battery behavior with two simultaneous high-bitrate videos should be judged on your machine during review.
+
+---
+
+## 5. Netlify Deployment (2026-10-25)
+
+- **Site:** https://texture-mosaic.netlify.app (project `texture-mosaic`, site ID `c304b92a-8570-4258-82d1-7a6d7c436337`, team `src.phag`), deployed via `netlify deploy --build --prod`.
+- **Config (`netlify.toml`):** `npm run build` → `publish = "dist"`, Node 22 build environment, security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`), `Permissions-Policy: camera=(self)` for webcam input, immutable caching for hashed `/assets/*`, production sourcemaps disabled.
+- **Debug API gating (§8.2):** `window.__TEXTURE_MOSAIC_DEBUG__` is exposed in dev/test builds, and in production only with `?debug=1`. Verified on the live site: not exposed by default.
+- **Live verification:** `?demo=1` loads the 25-layer demo dataset at 1280×720 with zero console errors and zero error toasts; render canvas is 1280×720.

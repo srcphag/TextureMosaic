@@ -266,4 +266,4 @@ Same as TextureStack: after the agent tests pass, the agent starts a **review bu
 - **Q4.** Should index-map transitions also trigger automatically at an interval, or only on `shuffle` / seed change?
   - **Resolved:** Only on manual `shuffle` or `seed` change in v1.
 - **Q5.** Netlify: which account and site name? Custom domain?
-  - **Resolved:** Prepare `netlify.toml` and verify the static production build locally first; deploy to Netlify in Step 9 after local review.
+  - **Resolved:** Deployed to https://texture-mosaic.netlify.app (team `src.phag`, project `texture-mosaic`). No custom domain yet; static build verified locally and live.
