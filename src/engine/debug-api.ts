@@ -41,6 +41,8 @@ export function installDebugAPI(
     triggerError: (message) => engine.addError(message),
     clearErrors: () => engine.clearErrors(),
     captureSnapshotDataUrl: () => engine.captureSnapshotDataUrl(),
+    exportPreset: (name) => engine.exportPresetObject(name),
+    importPreset: (preset) => engine.importPresetObject(preset),
   };
 
   window.__TEXTURE_MOSAIC_DEBUG__ = api;

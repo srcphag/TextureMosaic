@@ -146,6 +146,46 @@ export interface RawTextureInput {
   data: Uint8Array | Uint8ClampedArray;
 }
 
+/* --- Full-Scene JSON Presets (save / export / import) --- */
+
+export interface SerializedSlotMedia {
+  mode: SourceMode;
+  name: string;
+  width: number;
+  height: number;
+  /** Embedded Base64 Data URL (image/png for images/raw textures, video/* for
+   *  videos, PNG frame fallback for webcam). Omitted for 'none'/'noise'. */
+  dataUrl?: string;
+  playing?: boolean;
+  currentTime?: number;
+}
+
+export interface SerializedStackLayer {
+  name: string;
+  width: number;
+  height: number;
+  /** Embedded Base64 PNG Data URL of the layer image */
+  dataUrl: string;
+}
+
+export interface TextureMosaicPresetV1 {
+  version: 1;
+  app: 'TextureMosaic';
+  name: string;
+  /** ISO 8601 timestamp */
+  createdAt: string;
+  workingWidth: number;
+  workingHeight: number;
+  params: ShaderParams;
+  slots: {
+    control: SerializedSlotMedia;
+    indexMap: SerializedSlotMedia;
+    satMap: SerializedSlotMedia;
+    mask: SerializedSlotMedia;
+  };
+  stack: SerializedStackLayer[];
+}
+
 export type IndexMapsQuad = [
   RawTextureInput,
   RawTextureInput,
@@ -188,6 +228,8 @@ export interface TextureMosaicDebugAPI {
   triggerError(message: string): void;
   clearErrors(): void;
   captureSnapshotDataUrl(): string;
+  exportPreset(name?: string): Promise<TextureMosaicPresetV1>;
+  importPreset(preset: unknown): Promise<boolean>;
 }
 
 declare global {

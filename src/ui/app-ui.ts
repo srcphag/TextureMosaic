@@ -1,10 +1,12 @@
 import { TextureMosaicEngine } from '../engine/state';
+import { fetchPresetJson, listRepoPresets } from '../engine/presets';
 import {
   AppState,
   DEFAULT_WORKING_HEIGHT,
   DEFAULT_WORKING_WIDTH,
   MediaSlotTarget,
   ShaderParams,
+  TextureMosaicPresetV1,
 } from '../engine/types';
 
 function formatTimeMMSS(seconds: number): string {
@@ -43,6 +45,7 @@ export function mountTextureMosaicUI(
     <input type="file" accept="image/*" style="display:none" data-testid="mask-image-file-input" />
     <input type="file" accept="video/*,.mov,.mp4,.webm" style="display:none" data-testid="mask-video-file-input" />
     <input type="file" accept="image/*" multiple style="display:none" data-testid="stack-file-input" />
+    <input type="file" accept=".json,application/json" style="display:none" data-testid="preset-file-input" />
 
     <!-- LEFT PANEL: INPUTS (Figma 10:479) -->
     <aside class="ts-panel-inputs" data-testid="panel-inputs">
@@ -242,6 +245,30 @@ export function mountTextureMosaicUI(
       <div class="ts-section-heading">
         <span class="ts-section-title">Parameters</span>
       </div>
+
+      <!-- PRESETS (full-scene JSON save / export / import) -->
+      <section class="ts-param-group" data-testid="group-presets">
+        <div class="ts-block-header">
+          <span class="ts-field-label">presets</span>
+          <div class="ts-header-actions">
+            <button type="button" class="ts-reset-inline" data-testid="preset-import-btn" title="Import a preset .json file from disk">import</button>
+            <button type="button" class="ts-reset-inline" data-testid="preset-export-btn" title="Export the current scene as a .json preset file">export</button>
+          </div>
+        </div>
+
+        <div class="ts-control-split">
+          <span class="ts-control-prefix">preset</span>
+          <select class="ts-control-input ts-preset-select" data-testid="preset-select"></select>
+        </div>
+
+        <div class="ts-control-split">
+          <span class="ts-control-prefix">name</span>
+          <input type="text" class="ts-control-input" data-testid="preset-name-input" value="preset_01" spellcheck="false" />
+        </div>
+        <div class="ts-toggle-row">
+          <button type="button" class="button" data-testid="preset-save-btn" title="Save the full scene (parameters + embedded media) as a preset">save preset</button>
+        </div>
+      </section>
 
       <!-- WORKING RESOLUTION / CANVAS SIZE (Figma 4:118) -->
       <section class="ts-param-group" data-testid="group-resolution">
@@ -708,6 +735,116 @@ export function mountTextureMosaicUI(
   });
   q<HTMLButtonElement>('video-sync-btn').addEventListener('click', () => {
     engine.syncVideosToStart();
+  });
+
+  // Wire Presets (full-scene JSON save / export / import + repo dropdown)
+  const presetSelect = q<HTMLSelectElement>('preset-select');
+  const presetNameInput = q<HTMLInputElement>('preset-name-input');
+  const presetFileInput = q<HTMLInputElement>('preset-file-input');
+  const repoPresets = listRepoPresets();
+  const sessionPresets = new Map<string, TextureMosaicPresetV1>();
+  let sessionPresetCounter = 1;
+
+  const populatePresetSelect = (selectedValue?: string) => {
+    presetSelect.innerHTML = '';
+    if (repoPresets.length === 0 && sessionPresets.size === 0) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'no presets available';
+      presetSelect.appendChild(empty);
+      presetSelect.disabled = true;
+      return;
+    }
+    presetSelect.disabled = false;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— select preset —';
+    presetSelect.appendChild(placeholder);
+    for (const entry of repoPresets) {
+      const opt = document.createElement('option');
+      opt.value = `repo:${entry.id}`;
+      opt.textContent = entry.name;
+      presetSelect.appendChild(opt);
+    }
+    for (const [id, preset] of sessionPresets) {
+      const opt = document.createElement('option');
+      opt.value = `session:${id}`;
+      opt.textContent = preset.name;
+      presetSelect.appendChild(opt);
+    }
+    presetSelect.value = selectedValue ?? '';
+  };
+  populatePresetSelect();
+
+  presetSelect.addEventListener('change', async () => {
+    const value = presetSelect.value;
+    if (!value) return;
+    try {
+      if (value.startsWith('repo:')) {
+        const id = value.slice(5);
+        const entry = repoPresets.find((e) => e.id === id);
+        if (!entry) return;
+        const json = await fetchPresetJson(entry.url);
+        if (await engine.importPresetObject(json)) {
+          presetNameInput.value = entry.name;
+        }
+      } else if (value.startsWith('session:')) {
+        const preset = sessionPresets.get(value.slice(8));
+        if (!preset) return;
+        if (await engine.importPresetObject(preset)) {
+          presetNameInput.value = preset.name;
+        }
+      }
+    } catch (err) {
+      engine.addError(
+        err instanceof Error ? err.message : 'Failed to load preset.'
+      );
+    }
+  });
+
+  const saveCurrentSceneToSession = async (): Promise<void> => {
+    const name = presetNameInput.value.trim() || `preset_${sessionPresetCounter}`;
+    const preset = await engine.exportPresetObject(name);
+    const id = `p${sessionPresetCounter++}`;
+    sessionPresets.set(id, preset);
+    populatePresetSelect(`session:${id}`);
+  };
+
+  q<HTMLButtonElement>('preset-save-btn').addEventListener('click', async () => {
+    await saveCurrentSceneToSession();
+    await engine.downloadPresetJson(presetNameInput.value.trim() || 'preset_01');
+  });
+  q<HTMLButtonElement>('preset-export-btn').addEventListener(
+    'click',
+    async () => {
+      await engine.downloadPresetJson(
+        presetNameInput.value.trim() || 'preset_01'
+      );
+    }
+  );
+  q<HTMLButtonElement>('preset-import-btn').addEventListener('click', () => {
+    presetFileInput.click();
+  });
+  presetFileInput.addEventListener('change', async () => {
+    const file = presetFileInput.files?.[0];
+    presetFileInput.value = '';
+    if (!file) return;
+    try {
+      const json = JSON.parse(await file.text()) as unknown;
+      if (await engine.importPresetObject(json)) {
+        const preset = json as TextureMosaicPresetV1;
+        const name =
+          typeof preset.name === 'string' && preset.name.trim()
+            ? preset.name
+            : file.name.replace(/\.json$/i, '');
+        presetNameInput.value = name;
+        const id = `p${sessionPresetCounter++}`;
+        sessionPresets.set(id, { ...preset, name });
+        populatePresetSelect(`session:${id}`);
+      }
+    } catch {
+      engine.addError(`"${file.name}" is not valid JSON.`);
+    }
   });
 
   // Wire Working Resolution (U7 fix: preserve user typing during live animation frames, apply on Enter or change)

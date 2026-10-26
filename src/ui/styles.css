@@ -612,6 +612,18 @@ body {
   border-color: var(--ts-cyan);
 }
 
+/* Preset dropdown select (terminal.css has no bordered select wrapper) */
+.ts-preset-select {
+  cursor: pointer;
+  text-align: left;
+  text-transform: lowercase;
+}
+
+.ts-preset-select option {
+  background: var(--ts-bg-outer);
+  color: var(--ts-text);
+}
+
 /* 3-way Rotation Mode segmented buttons */
 .ts-mode-row {
   display: grid;

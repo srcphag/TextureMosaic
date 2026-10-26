@@ -7,6 +7,14 @@ import {
 } from './fixtures';
 import { WebGLPipeline } from './gl-pipeline';
 import { generatePerlinNoiseTexture } from './noise';
+import {
+  dataUrlToBlob,
+  dataUrlToImage,
+  elementToPngDataUrl,
+  rawTextureToPngDataUrl,
+  validatePreset,
+  blobToDataUrl,
+} from './presets';
 import { SlotPreviewRenderer } from './previews';
 import {
   AppError,
@@ -20,8 +28,11 @@ import {
   MediaSourceState,
   ParamGroup,
   RawTextureInput,
+  SerializedSlotMedia,
+  SerializedStackLayer,
   ShaderParams,
   SourceMode,
+  TextureMosaicPresetV1,
 } from './types';
 
 const NOISE_TEXTURE_SIZE = 256;
@@ -1704,6 +1715,252 @@ export class TextureMosaicEngine {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  }
+
+  /* --- FULL-SCENE JSON PRESETS (save / export / import) --- */
+
+  private async serializeSlotMedia(
+    target: MediaSlotTarget
+  ): Promise<SerializedSlotMedia> {
+    const src = this.getSlotSourceState(target);
+    const slot = this.getSlotMedia(target);
+    const out: SerializedSlotMedia = {
+      mode: src.mode,
+      name: src.name,
+      width: src.width,
+      height: src.height,
+    };
+
+    if (src.mode === 'image') {
+      if (slot.imageElement) {
+        const el = slot.imageElement;
+        const w =
+          el instanceof HTMLImageElement
+            ? el.naturalWidth || el.width
+            : el.width;
+        const h =
+          el instanceof HTMLImageElement
+            ? el.naturalHeight || el.height
+            : el.height;
+        out.width = w;
+        out.height = h;
+        out.dataUrl = elementToPngDataUrl(el, w, h);
+      } else if (slot.imageRaw) {
+        out.width = slot.imageRaw.width;
+        out.height = slot.imageRaw.height;
+        out.dataUrl = rawTextureToPngDataUrl(slot.imageRaw);
+      }
+    } else if (src.mode === 'video') {
+      if (slot.videoUrl) {
+        try {
+          const resp = await fetch(slot.videoUrl);
+          if (resp.ok) {
+            out.dataUrl = await blobToDataUrl(await resp.blob());
+          }
+        } catch {
+          // Video URL not fetchable (e.g. remote without CORS): keep mode only.
+        }
+      }
+      out.playing = src.playing;
+      out.currentTime = src.currentTime;
+    } else if (src.mode === 'webcam') {
+      if (slot.webcamVideo && slot.webcamVideo.readyState >= 2) {
+        const v = slot.webcamVideo;
+        out.width = v.videoWidth || 640;
+        out.height = v.videoHeight || 480;
+        out.dataUrl = elementToPngDataUrl(v, out.width, out.height);
+      }
+    }
+    // 'noise' is regenerated deterministically from noise params; 'none' has no payload.
+    return out;
+  }
+
+  private serializeStackLayers(): SerializedStackLayer[] {
+    return this.state.stack.map((item) => {
+      if (item.sourceElement) {
+        return {
+          name: item.name,
+          width: item.width,
+          height: item.height,
+          dataUrl: elementToPngDataUrl(
+            item.sourceElement,
+            item.width,
+            item.height
+          ),
+        };
+      }
+      return {
+        name: item.name,
+        width: item.width,
+        height: item.height,
+        dataUrl: rawTextureToPngDataUrl({
+          width: item.width,
+          height: item.height,
+          data: item.rgbaData ?? new Uint8Array(item.width * item.height * 4),
+        }),
+      };
+    });
+  }
+
+  /**
+   * Serialize the complete scene (all shader parameters, canvas size, the 4
+   * input media slots and every texture stack layer with embedded Base64
+   * media) into a self-contained preset object.
+   */
+  public async exportPresetObject(
+    name: string = 'preset_01'
+  ): Promise<TextureMosaicPresetV1> {
+    const [control, indexMap, satMap, mask] = await Promise.all([
+      this.serializeSlotMedia('control'),
+      this.serializeSlotMedia('indexMap'),
+      this.serializeSlotMedia('satMap'),
+      this.serializeSlotMedia('mask'),
+    ]);
+    return {
+      version: 1,
+      app: 'TextureMosaic',
+      name,
+      createdAt: new Date().toISOString(),
+      workingWidth: this.state.workingWidth,
+      workingHeight: this.state.workingHeight,
+      params: { ...this.state.params },
+      slots: { control, indexMap, satMap, mask },
+      stack: this.serializeStackLayers(),
+    };
+  }
+
+  /** Export the current scene and download it as `<name>.json`. */
+  public async downloadPresetJson(name: string = 'preset_01'): Promise<void> {
+    try {
+      const preset = await this.exportPresetObject(name);
+      const blob = new Blob([JSON.stringify(preset, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${preset.name.replace(/[^\w\-]+/g, '_') || 'preset'}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      this.addError(
+        err instanceof Error ? err.message : 'Failed to export preset.'
+      );
+    }
+  }
+
+  private async restoreSlotFromPreset(
+    target: MediaSlotTarget,
+    slot: SerializedSlotMedia
+  ): Promise<void> {
+    if (slot.mode === 'none') {
+      if (target === 'satMap') this.clearSatMap();
+      if (target === 'mask') this.clearMask();
+      return;
+    }
+    if (slot.mode === 'noise') {
+      this.activateSlotMode(target, 'noise');
+      return;
+    }
+    if (slot.mode === 'image' && slot.dataUrl) {
+      const img = await dataUrlToImage(slot.dataUrl);
+      this.setSlotImageElement(target, img, slot.name || 'preset_image.png');
+      return;
+    }
+    if (slot.mode === 'video' && slot.dataUrl) {
+      const blob = dataUrlToBlob(slot.dataUrl);
+      const url = URL.createObjectURL(blob);
+      await this.setSlotVideoUrl(
+        target,
+        url,
+        slot.name || 'preset_video',
+        true,
+        true
+      );
+      const media = this.getSlotMedia(target);
+      if (media.videoElement) {
+        const t = slot.currentTime ?? 0;
+        if (Number.isFinite(t) && t > 0) {
+          media.videoElement.currentTime = t;
+        }
+        if (slot.playing === false) {
+          media.videoElement.pause();
+        }
+        this.syncVideoTransportState();
+      }
+      return;
+    }
+    if (slot.mode === 'webcam') {
+      const ok = await this.startSlotWebcam(target);
+      if (!ok && slot.dataUrl) {
+        // Fallback: restore the captured webcam frame as a static image.
+        const img = await dataUrlToImage(slot.dataUrl);
+        this.setSlotImageElement(target, img, slot.name || 'webcam_frame.png');
+      }
+      return;
+    }
+  }
+
+  /**
+   * Restore a complete scene from a preset object (parsed JSON). Applies in
+   * order: canvas size → texture stack → input media slots → shader params.
+   * Invalid presets surface an error toast and leave the scene untouched.
+   */
+  public async importPresetObject(json: unknown): Promise<boolean> {
+    let preset: TextureMosaicPresetV1;
+    try {
+      preset = validatePreset(json);
+    } catch (err) {
+      this.addError(
+        err instanceof Error ? err.message : 'Invalid preset file.'
+      );
+      return false;
+    }
+
+    try {
+      this.setWorkingResolution(preset.workingWidth, preset.workingHeight);
+
+      // 1. Texture stack (before params so numImages clamps correctly)
+      if (preset.stack.length > 0) {
+        const imgs = await Promise.all(
+          preset.stack.slice(0, MAX_STACK_LAYERS).map(async (layer) => ({
+            img: await dataUrlToImage(layer.dataUrl),
+            name: layer.name || 'layer.png',
+          }))
+        );
+        this.replaceStackWithImageElements(imgs);
+      } else {
+        this.clearStack();
+      }
+
+      // 2. Input media slots (before params so maskInfluence clamps correctly)
+      await this.restoreSlotFromPreset('control', preset.slots.control);
+      await this.restoreSlotFromPreset('indexMap', preset.slots.indexMap);
+      await this.restoreSlotFromPreset('satMap', preset.slots.satMap);
+      await this.restoreSlotFromPreset('mask', preset.slots.mask);
+
+      // 3. Shader parameters (clamped via setParam)
+      const keys = Object.keys(DEFAULT_SHADER_PARAMS) as (keyof ShaderParams)[];
+      const presetParams = preset.params as unknown as Record<string, unknown>;
+      for (const key of keys) {
+        const v = presetParams[key];
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          this.setParam(key, v);
+        }
+      }
+
+      this.renderNow();
+      this.ensureLoopState();
+      this.emit();
+      return true;
+    } catch (err) {
+      this.addError(
+        err instanceof Error ? err.message : 'Failed to apply preset.'
+      );
+      return false;
+    }
   }
 }
 
