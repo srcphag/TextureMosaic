@@ -11,7 +11,14 @@ export default defineConfig({
     port: 5174,
     strictPort: false,
     watch: {
-      ignored: ['**/TouchDesigner/**', '**/Shaders/**', '**/Mesh/**'],
+      // Large binary/media and data files: excluding them keeps the dev watcher from
+      // reload-storming (and crashing) on multi-MB preset JSONs and raw scans.
+      ignored: [
+        '**/TouchDesigner/**',
+        '**/Shaders/**',
+        '**/Mesh/**',
+        '**/presets/**',
+      ],
     },
   },
 });
