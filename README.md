@@ -17,6 +17,6 @@ npm run dev
 
 - **Local review URL:** `http://localhost:5174/`
 - **Demo scene URL:** `http://localhost:5174/?demo=1`
-- **Live site (Netlify):** https://texture-mosaic.netlify.app — demo: https://texture-mosaic.netlify.app/?demo=1
+- **Live site (Netlify):** https://texturemosaic.netlify.app — demo: https://texturemosaic.netlify.app/?demo=1
 - **Test report & screenshots:** [`tests/REPORT.md`](./tests/REPORT.md)
 - **Decisions & custom CSS log:** [`decisions.md`](./decisions.md)
